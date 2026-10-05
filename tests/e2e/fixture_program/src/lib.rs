@@ -2,6 +2,11 @@
 //!
 //! Uses #[lez_program] to exercise the full macro expansion,
 //! IDL generation, and handler invocation on the host.
+//!
+//! The plan-phase marker is spelled `#[plan]` on some instructions and
+//! `#[instruction]` on others, deliberately: the two are synonyms and this
+//! fixture is what proves it. Keep the mix — collapsing it to one spelling would
+//! stop covering the other.
 
 #![allow(dead_code, unused_imports, unused_variables)]
 
@@ -13,7 +18,7 @@ mod treasury {
     use super::*;
 
     /// Initialize the treasury state.
-    #[instruction]
+    #[plan]
     pub fn initialize(
         #[account(init, pda = literal("treasury_state"))]
         state: AccountWithMetadata,
@@ -25,7 +30,7 @@ mod treasury {
     }
 
     /// Create a user vault (PDA from arg seed).
-    #[instruction]
+    #[plan]
     pub fn create_vault(
         #[account(init, pda = arg("owner_key"))]
         vault: AccountWithMetadata,
@@ -37,7 +42,7 @@ mod treasury {
     }
 
     /// Create a user config (PDA from literal + arg multi-seed).
-    #[instruction]
+    #[plan]
     pub fn create_config(
         #[account(init, pda = [literal("config"), arg("user_id")])]
         config: AccountWithMetadata,

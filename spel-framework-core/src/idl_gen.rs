@@ -759,8 +759,18 @@ struct ArgParam {
     ty: Type,
 }
 
+/// Attribute names that mark a plan-phase function. `plan` is preferred since
+/// LEZ v0.3.0 (the guest entry point is `run_program(plan, apply)`);
+/// `instruction` is the older spelling, kept as a synonym. Must stay in step
+/// with `PLAN_ATTRS` in `spel-framework-macros`.
+const PLAN_ATTRS: [&str; 2] = ["instruction", "plan"];
+
+pub(crate) fn is_plan_attr(attr: &Attribute) -> bool {
+    PLAN_ATTRS.iter().any(|name| attr.path().is_ident(name))
+}
+
 pub(crate) fn has_instruction_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("instruction"))
+    attrs.iter().any(is_plan_attr)
 }
 
 fn parse_instruction(func: ItemFn) -> Result<InstructionInfo, IdlGenError> {

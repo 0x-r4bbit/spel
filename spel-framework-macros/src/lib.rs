@@ -117,6 +117,39 @@ pub fn lez_program(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// rather than this expansion and still sees the attributes.
 #[proc_macro_attribute]
 pub fn instruction(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_plan_marker(item)
+}
+
+/// Marker attribute for plan-phase functions — an exact synonym of
+/// [`instruction`], and the preferred spelling going forward.
+///
+/// The name anticipates LEZ v0.3.0, where a guest's entry point becomes
+/// `run_program(plan, apply)` and an annotated function is literally the plan
+/// half: it will decide effects and chained calls from account metadata and
+/// instruction arguments, without being able to read account data. Introducing
+/// the spelling now means the v0.3.0 port does not also have to be a rename of
+/// every instruction in every program.
+///
+/// Today the two are interchangeable and behaviour is unchanged — an annotated
+/// function still takes `AccountWithMetadata` and returns state diffs. When the
+/// framework moves to v0.3.0 that signature changes under *both* spellings:
+/// keeping the `#[instruction]` name buys no semantic compatibility, only a
+/// smaller diff.
+#[proc_macro_attribute]
+pub fn plan(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_plan_marker(item)
+}
+
+/// Shared expansion for [`instruction`] and [`plan`].
+///
+/// Inside an `#[lez_program]` module this never runs: the module macro consumes
+/// the whole module and emits the handler functions itself. Standalone it does
+/// run, which is the case an extension library hits — its plan functions live
+/// outside `#[lez_program]`. There it strips the `#[account(...)]` helper
+/// attributes off the parameters so rustc accepts a function the framework has
+/// not rewritten. Extension discovery is unaffected: the scanner parses the
+/// library source rather than this expansion, and still sees the attributes.
+fn expand_plan_marker(item: TokenStream) -> TokenStream {
     let mut func = parse_macro_input!(item as ItemFn);
     strip_account_attrs(&mut func);
     quote!(#func).into()
@@ -631,8 +664,16 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
     Ok(expanded)
 }
 
+/// Attribute names that mark a plan-phase function. `plan` is preferred;
+/// `instruction` is the pre-v0.3.0 spelling, kept as a synonym.
+const PLAN_ATTRS: [&str; 2] = ["instruction", "plan"];
+
+fn is_plan_attr(attr: &Attribute) -> bool {
+    PLAN_ATTRS.iter().any(|name| attr.path().is_ident(name))
+}
+
 fn has_instruction_attr(attrs: &[Attribute]) -> bool {
-    attrs.iter().any(|a| a.path().is_ident("instruction"))
+    attrs.iter().any(is_plan_attr)
 }
 
 fn parse_instruction(func: ItemFn) -> syn::Result<InstructionInfo> {
@@ -1220,7 +1261,7 @@ fn generate_handler_fns(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
         .filter(|ix| ix.external_call_path.is_none())
         .map(|ix| {
             let mut func = ix.func.clone();
-            func.attrs.retain(|a| !a.path().is_ident("instruction"));
+            func.attrs.retain(|a| !is_plan_attr(a));
             strip_account_attrs(&mut func);
             quote! { #func }
         })

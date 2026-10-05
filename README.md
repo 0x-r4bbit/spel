@@ -93,6 +93,25 @@ mod my_program {
 }
 ```
 
+### Plan-Phase Marker: `#[plan]` / `#[instruction]`
+
+`#[plan]` and `#[instruction]` are exact synonyms — use either. Behaviour is
+identical today; `#[plan]` is the preferred spelling going forward.
+
+The name anticipates LEZ v0.3.0, where a guest's entry point becomes
+`run_program(plan, apply)` and an annotated function is literally the plan half —
+deciding effects and chained calls from account metadata and instruction
+arguments, with no access to account data. Having the spelling available now
+means that upgrade does not also have to rename every instruction in every
+program. Note that the name buys no *semantic* compatibility: when the framework
+moves to v0.3.0 the signature changes under both spellings.
+
+The two are interchangeable everywhere the framework looks for the marker,
+including extension-library discovery and IDL generation. The fixture program in
+`tests/e2e/fixture_program/` deliberately uses a mix, so `e2e_idl_generation`
+covers both: it asserts all 12 instructions are discovered, and checks the three
+`#[plan]` ones and three `#[instruction]` ones field by field.
+
 ### Account Attributes
 
 | Attribute | Description |

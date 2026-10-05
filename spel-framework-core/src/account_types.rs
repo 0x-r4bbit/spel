@@ -297,7 +297,7 @@ pub fn collect_account_types(items: &[Item]) -> (Vec<IdlAccountType>, Vec<IdlTyp
     // also end up in the IDL's `types` section.
     for item in items {
         let Item::Fn(f) = item else { continue };
-        if !f.attrs.iter().any(|a| a.path().is_ident("instruction")) {
+        if !crate::idl_gen::has_instruction_attr(&f.attrs) {
             continue;
         }
         for input in &f.sig.inputs {

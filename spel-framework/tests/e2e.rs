@@ -59,7 +59,12 @@ fn e2e_idl_generation() {
     assert_eq!(idl.name, "treasury");
     assert_eq!(idl.instructions.len(), 12);
 
-    // initialize instruction
+    // The fixture marks instructions 0-2 with `#[plan]` and 3-11 with
+    // `#[instruction]`. The two are synonyms, so the count above proves both
+    // spellings are discovered, and the per-instruction checks below cover three
+    // of each. Keep the mix in the fixture or this coverage goes away.
+
+    // initialize instruction (#[plan])
     let init = &idl.instructions[0];
     assert_eq!(init.name, "initialize");
     assert_eq!(init.accounts.len(), 2);
@@ -94,7 +99,7 @@ fn e2e_idl_generation() {
     assert_eq!(config.args.len(), 1);
     assert_eq!(config.args[0].name, "user_id");
 
-    // create_ledger instruction
+    // create_ledger instruction (#[instruction] — the older spelling)
     let ledger = &idl.instructions[3];
     assert_eq!(ledger.name, "create_ledger");
     assert_eq!(ledger.accounts.len(), 2);
