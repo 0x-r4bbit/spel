@@ -12,7 +12,7 @@ use nssa::program::Program;
 use nssa::public_transaction::{Message, WitnessSet};
 use nssa::{AccountId, FeeDeclaration, PublicTransaction};
 use nssa::{PublicKey, Signature};
-use nssa_core::account::Nonce;
+use nssa_core::account::{Nonce, ProgramShardSelector};
 use sequencer_service_rpc::RpcClient as _;
 use serde_json::{json, Value};
 use spel_framework_core::idl::{IdlInstruction, IdlSeed, IdlType, SpelIdl};
@@ -439,7 +439,7 @@ pub async fn execute_instruction(
     if has_private {
         // ─── Privacy-preserving transaction ──────────────────
         use nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies;
-        use wallet::AccountIdentity;
+        use wallet::{AccountIdentity, AccountMention};
 
         let program = program_obj.unwrap_or_else(|| {
             eprintln!(
@@ -517,8 +517,15 @@ pub async fn execute_instruction(
             }
         }
 
+        // Same shard binding as the public path above: each identity selects the
+        // called program's shard.
+        let pp_mentions: Vec<AccountMention> = pp_accounts
+            .into_iter()
+            .map(|identity| identity.select_program_shard(program_account_id))
+            .collect();
+
         let (response, _shared_secrets) = wallet_core
-            .send_privacy_preserving_tx(pp_accounts, instruction_data, &program_with_deps)
+            .send_privacy_preserving_tx(pp_mentions, instruction_data, &program_with_deps)
             .await
             .unwrap_or_else(|e| {
                 eprintln!(
@@ -633,9 +640,28 @@ pub async fn execute_instruction(
                 })
         };
 
+        // A transaction names *shards*, not accounts: each entry is an
+        // (account, owning program) pair, and `validate_plan` will not let the
+        // program emit an effect on anything outside this set.
+        //
+        // Every account is bound to the called program's own shard. That is right
+        // for a program acting on its own state, which is what `spel <program>
+        // <instruction>` invokes, but it cannot express an instruction that reaches
+        // another program's shard directly — the IDL records no per-account shard
+        // owner yet, so there is nothing to derive one from. Such an instruction
+        // has to route through a chained call, where the callee names its own
+        // shards.
+        let shard_selectors: Vec<ProgramShardSelector> = account_ids
+            .iter()
+            .map(|id| ProgramShardSelector {
+                account_id: *id,
+                program_account_id,
+            })
+            .collect();
+
         let message = Message::new_preserialized(
             program_account_id,
-            account_ids,
+            shard_selectors,
             nonces,
             instruction_data,
             Some(FeeDeclaration::new(payer, gas_limit, 0, max_fee)),

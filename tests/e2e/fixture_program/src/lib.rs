@@ -21,77 +21,77 @@ mod treasury {
     #[plan]
     pub fn initialize(
         #[account(init, pda = literal("treasury_state"))]
-        state: AccountWithMetadata,
+        state: AccountMeta,
         #[account(signer)]
-        authority: AccountWithMetadata,
+        authority: AccountMeta,
         threshold: u64,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![state, authority], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Create a user vault (PDA from arg seed).
     #[plan]
     pub fn create_vault(
         #[account(init, pda = arg("owner_key"))]
-        vault: AccountWithMetadata,
+        vault: AccountMeta,
         #[account(signer)]
-        owner: AccountWithMetadata,
+        owner: AccountMeta,
         owner_key: [u8; 32],
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![vault, owner], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Create a user config (PDA from literal + arg multi-seed).
     #[plan]
     pub fn create_config(
         #[account(init, pda = [literal("config"), arg("user_id")])]
-        config: AccountWithMetadata,
+        config: AccountMeta,
         #[account(signer)]
-        admin: AccountWithMetadata,
+        admin: AccountMeta,
         user_id: [u8; 32],
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![config, admin], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Create a ledger entry (PDA from literal + u64 arg + u32 arg).
     #[instruction]
     pub fn create_ledger(
         #[account(init, pda = [literal("ledger"), arg("user_id"), arg("seq")])]
-        ledger: AccountWithMetadata,
+        ledger: AccountMeta,
         #[account(signer)]
-        authority: AccountWithMetadata,
+        authority: AccountMeta,
         user_id: u64,
         seq: u32,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![ledger, authority], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Register a named entity (PDA from arg + arg with String type).
     #[instruction]
     pub fn register_entity(
         #[account(init, pda = [arg("domain"), arg("name")])]
-        entity: AccountWithMetadata,
+        entity: AccountMeta,
         #[account(signer)]
-        registrar: AccountWithMetadata,
+        registrar: AccountMeta,
         domain: String,
         name: String,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![entity, registrar], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Transfer funds.
     #[instruction]
     pub fn transfer(
         #[account(mut)]
-        from: AccountWithMetadata,
+        from: AccountMeta,
         #[account(mut)]
-        to: AccountWithMetadata,
+        to: AccountMeta,
         #[account(signer)]
-        signer: AccountWithMetadata,
+        signer: AccountMeta,
         amount: u64,
         memo: String,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![from, to, signer], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Create a record whose PDA is derived from the owner's account ID.
@@ -100,11 +100,11 @@ mod treasury {
     #[instruction]
     pub fn create_record(
         #[account(init, pda = account("owner"))]
-        record: AccountWithMetadata,
+        record: AccountMeta,
         #[account(signer)]
-        owner: AccountWithMetadata,
+        owner: AccountMeta,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![record, owner], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Delegate a mutation to another program instead of performing it directly.
@@ -118,52 +118,52 @@ mod treasury {
     #[instruction]
     pub fn delegate_to_program(
         #[account(mut, pda = literal("treasury_state"))]
-        state: AccountWithMetadata,
+        state: AccountMeta,
         #[account(signer)]
-        authority: AccountWithMetadata,
-        target: AccountWithMetadata,
+        authority: AccountMeta,
+        target: AccountMeta,
         target_program_account_id: AccountId,
     ) -> SpelResult {
-        let call = nssa_core::program::ChainedCall {
-            program_account_id: target_program_account_id,
-            instruction_data: vec![],
-            pre_state_ids: vec![target.account_id],
-            pda_seeds: vec![],
-        };
+        // A chained call names shards, not accounts: each selector is an
+        // (account, owning program) pair, so the callee's plan receives exactly
+        // the handles given here.
+        let call = nssa_core::program::ChainedCall::new(
+            target_program_account_id,
+            vec![nssa_core::account::ProgramShardSelector::from(&target)],
+            &(),
+        );
 
-        // `target` is returned unchanged: this program never mutates it, but every
-        // declared account must still appear in the output.
-        Ok(SpelOutput::execute(
-            vec![state, authority, target],
-            vec![call],
-        ))
+        // `state`, `authority` and `target` carry no effect: under v0.3.0 an
+        // account a plan does not touch is simply untouched, so there is nothing
+        // to echo back.
+        Ok(SpelOutput::empty().call(call))
     }
 
     /// Initialize a private PDA — address is unique per (seed, npk, vpk) tuple.
     #[instruction]
     pub fn init_private_account(
         #[account(init, private_pda, pda = literal("private_vault"), npk = arg("user_npk"), vpk = arg("user_vpk"))]
-        account: AccountWithMetadata,
+        account: AccountMeta,
         #[account(signer)]
-        authority: AccountWithMetadata,
+        authority: AccountMeta,
         user_npk: nssa_core::NullifierPublicKey,
         user_vpk: nssa_core::encryption::ViewingPublicKey,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![account, authority], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Batch update: one fixed authority + variable-length list of target accounts.
     #[instruction]
     pub fn batch_update(
         #[account(signer)]
-        authority: AccountWithMetadata,
+        authority: AccountMeta,
         #[account(mut)]
-        targets: Vec<AccountWithMetadata>,
+        targets: Vec<AccountMeta>,
         value: u64,
     ) -> SpelResult {
         let mut accounts = vec![authority];
         accounts.extend(targets);
-        Ok(SpelOutput::execute(accounts, vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Initialize a holding account, validating the definition is owned by this program.
@@ -172,23 +172,75 @@ mod treasury {
     pub fn initialize_holding(
         ctx: ProgramContext,
         #[account(owner = self_account_id)]
-        definition: AccountWithMetadata,
+        definition: AccountMeta,
         #[account(init, signer)]
-        holding: AccountWithMetadata,
+        holding: AccountMeta,
     ) -> SpelResult {
         // ctx.self_account_id and ctx.caller_account_id are available here
         let _ = ctx; // suppress unused warning in this example
-        Ok(SpelOutput::execute(vec![definition, holding], vec![]))
+        Ok(SpelOutput::empty())
     }
 
     /// Demonstrate a validity window on the program output.
+    /// Payload of [`Effect::Bump`]: how much to add to the counter shard.
+    ///
+    /// An effect payload is whatever the plan half decided and the apply half
+    /// needs. It is Borsh-encoded into the effect, so it must derive the Borsh
+    /// traits; it is not part of the instruction ABI.
+    #[derive(BorshSerialize, BorshDeserialize)]
+    #[borsh(crate = "spel_framework::borsh")]
+    pub struct Bump {
+        pub amount: u64,
+    }
+
+    /// Write a counter into this program's own shard — the one instruction here
+    /// that reaches the apply phase.
+    ///
+    /// `ProgramContext` is how a handler learns `self_account_id`, which emitting
+    /// an effect on its own shard requires. The context is injected by the
+    /// dispatcher and never appears in the instruction ABI or IDL.
+    #[plan]
+    pub fn bump_counter(
+        ctx: ProgramContext,
+        #[account(mut)]
+        counter: AccountMeta,
+        amount: u64,
+    ) -> SpelResult {
+        Ok(SpelOutput::empty().effect(&counter, ctx.self_account_id, &Effect::Bump(Bump { amount })))
+    }
+
+    /// Apply half of [`bump_counter`]: add `amount` to the shard's counter.
+    ///
+    /// Receives this shard's current bytes and returns their replacement. An
+    /// absent shard reads as empty, which is the "fresh" case `#[account(init)]`
+    /// used to assert in the plan phase and no longer can.
+    #[apply]
+    pub fn bump(effect: Bump, pre_data: &ShardData) -> Option<ShardData> {
+        let current = if pre_data.is_empty() {
+            0u64
+        } else {
+            u64::from_le_bytes(
+                pre_data[..8]
+                    .try_into()
+                    .expect("counter shard holds a u64"),
+            )
+        };
+        let next = current
+            .checked_add(effect.amount)
+            .expect("counter must not overflow");
+        Some(
+            ShardData::try_from(next.to_le_bytes().to_vec())
+                .expect("8 bytes fits under DATA_MAX_LENGTH"),
+        )
+    }
+
     /// The returned SpelOutput restricts the transaction to a specific block range.
     #[instruction]
     pub fn emit_with_window(
         #[account(signer)]
-        authority: AccountWithMetadata,
+        authority: AccountMeta,
     ) -> SpelResult {
-        Ok(SpelOutput::execute(vec![authority], vec![])
+        Ok(SpelOutput::empty()
             .try_with_block_validity_window(100u64..200)
             .expect("100..200 is a valid range"))
     }
@@ -221,11 +273,11 @@ mod tests {
     }
 
     #[test]
-    fn delegate_names_the_target_as_a_pre_state_of_the_call() {
-        // Since v0.2.5 a chained call carries account *ids*, not pre-states: the
-        // state machine resolves them, and the callee's authority comes from the
-        // caller's own authorized set rather than a flag on a cloned pre-state.
-        // Naming the target here is what puts it in the callee's reach at all.
+    fn delegate_names_the_target_shard_in_the_call() {
+        // A chained call carries *shard selectors*: an (account, owning program)
+        // pair each. The callee's plan receives exactly these handles, and
+        // `validate_plan` will not let it emit an effect on anything else, so
+        // naming the target here is what puts it in the callee's reach at all.
         let target = make_account_with_id([7u8; 32], false);
         let out = treasury::delegate_to_program(
             make_account(false),
@@ -235,17 +287,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            out.chained_calls[0].pre_state_ids,
-            vec![target.account_id],
-            "the call must name the target it delegates to"
+            out.chained_calls[0].shard_selectors,
+            vec![nssa_core::account::ProgramShardSelector::from(&target)],
+            "the call must name the target shard it delegates to"
         );
     }
 
     #[test]
-    fn delegate_returns_the_target_unmodified() {
-        // The whole point of delegating: the caller must not mutate an account it
-        // does not own. It must still *report* it — v0.2.5 fails a transaction
-        // whose output omits a declared account.
+    fn delegate_emits_no_effects_of_its_own() {
+        // The whole point of delegating: the caller must not touch the shards it
+        // is handing off. Up to v0.2.5 it had to *report* them anyway — a
+        // transaction whose output omitted a declared account failed with
+        // `DeclaredAccountMissingFromOutput` — so this used to assert three
+        // unchanged diffs. Under v0.3.0 emitting nothing IS leaving them alone,
+        // so the absence of effects is the assertion.
         let target = make_account_with_id([7u8; 32], false);
         let out = treasury::delegate_to_program(
             make_account(false),
@@ -254,26 +309,17 @@ mod tests {
             AccountId::new([42u8; 32]),
         )
         .unwrap();
-        assert_eq!(out.state_diffs.len(), 3, "every declared account is reported");
-        let target_diff = &out.state_diffs[2];
-        assert_eq!(target_diff.pre_state.account_id, target.account_id);
-        assert_eq!(
-            target_diff.post_data, None,
-            "target must come back with no data change"
+        assert!(
+            out.effects.is_empty(),
+            "delegating must not plan an effect on any shard"
         );
-        assert_eq!(
-            target_diff.post_balance_diff,
-            nssa_core::account::BalanceDiff::Add(0),
-            "target must come back with no balance change"
-        );
+        assert_eq!(out.chained_calls.len(), 1, "only the delegation itself");
     }
 
-    fn make_account(authorized: bool) -> AccountWithMetadata {
-        AccountWithMetadata {
-            account_id: nssa_core::account::AccountId::new([0u8; 32]),
-            account: nssa_core::account::Account::default(),
-            is_authorized: authorized,
-        }
+    /// A plan-phase handle: id, authorization, and which shard it selects.
+    /// No account data — a plan never sees any.
+    fn make_account(authorized: bool) -> AccountMeta {
+        make_account_with_id([0u8; 32], authorized)
     }
 
     #[test]
@@ -281,7 +327,7 @@ mod tests {
         let idl = __program_idl();
         assert_eq!(idl.name, "treasury");
         assert_eq!(idl.version, "0.1.0");
-        assert_eq!(idl.instructions.len(), 12);
+        assert_eq!(idl.instructions.len(), 13);
         assert_eq!(idl.instructions[0].name, "initialize");
     }
 
@@ -290,7 +336,7 @@ mod tests {
         let idl: spel_framework::idl::SpelIdl =
             serde_json::from_str(PROGRAM_IDL_JSON).expect("PROGRAM_IDL_JSON should parse");
         assert_eq!(idl.name, "treasury");
-        assert_eq!(idl.instructions.len(), 12);
+        assert_eq!(idl.instructions.len(), 13);
     }
 
     #[test]
@@ -388,12 +434,17 @@ mod tests {
 
     // ── PDA validation tests ─────────────────────────────────────────
 
-    fn make_account_with_id(id: [u8; 32], authorized: bool) -> AccountWithMetadata {
-        AccountWithMetadata {
-            account_id: nssa_core::account::AccountId::new(id),
-            account: nssa_core::account::Account::default(),
-            is_authorized: authorized,
-        }
+    /// A handle selecting *this* program's shard of `id`.
+    ///
+    /// The third field is the shard selector: which program's slice of the
+    /// account this handle names. It replaces the old `account` field, since a
+    /// plan receives no account data.
+    fn make_account_with_id(id: [u8; 32], authorized: bool) -> AccountMeta {
+        AccountMeta::new(
+            nssa_core::account::AccountId::new(id),
+            authorized,
+            test_program_id(),
+        )
     }
 
     fn test_program_id() -> AccountId {
@@ -707,7 +758,9 @@ mod tests {
         let acc = make_account(true);
         let result = treasury::batch_update(acc, vec![], 0);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().state_diffs.len(), 1); // only authority
+        // No effects: `batch_update` touches no shard, and under v0.3.0 an
+        // untouched account needs no output entry.
+        assert!(result.unwrap().effects.is_empty());
     }
 
     #[test]
@@ -719,14 +772,16 @@ mod tests {
         assert_eq!(ix.args[0].name, "value");
     }
 
-    /// The rest-accounts branch must report a diff per account, confirming the
-    /// accounts expression is evaluated and extracted correctly.
+    /// The rest-accounts branch must accept a variable-length tail. It used to be
+    /// checked by counting one diff per account; the handler now plans no effects,
+    /// so what it proves is that the `Vec<AccountMeta>` parameter is extracted and
+    /// the handler runs at all.
     #[test]
-    fn batch_update_state_diffs_match_account_count() {
+    fn batch_update_accepts_a_variable_length_tail() {
         let authority = make_account(true);
         let targets = vec![make_account(false), make_account(false)];
         let result = treasury::batch_update(authority, targets, 99).unwrap();
-        assert_eq!(result.state_diffs.len(), 3); // authority + 2 targets
+        assert!(result.effects.is_empty());
     }
 
     // ── init_private_account (private PDA) ──────────────────────────────────
@@ -844,14 +899,17 @@ mod tests {
 
     // ── ProgramContext + owner constraint tests ──────────────────────────────
 
-    fn make_account_with_owner(id: [u8; 32], owner: AccountId, authorized: bool) -> AccountWithMetadata {
-        let mut account = nssa_core::account::Account::default();
-        account.program_owner = owner;
-        AccountWithMetadata {
-            account_id: nssa_core::account::AccountId::new(id),
-            account,
-            is_authorized: authorized,
-        }
+    /// A handle selecting `owner`'s shard of `id`.
+    ///
+    /// `#[account(owner = ...)]` is now a question about the *selector* rather
+    /// than a stored field: a shard is keyed by the program that owns it, so
+    /// "who owns this?" is answered by which key the handle names.
+    fn make_account_with_owner(id: [u8; 32], owner: AccountId, authorized: bool) -> AccountMeta {
+        AccountMeta::new(
+            nssa_core::account::AccountId::new(id),
+            authorized,
+            owner,
+        )
     }
 
     #[test]
@@ -916,15 +974,14 @@ mod tests {
         // Even if holding is not empty and not authorized, owner error should surface first.
         let program_id = AccountId::new([1u8; 32]);
         let other_program = AccountId::new([99u8; 32]);
-        let mut bad_account = nssa_core::account::Account::default();
-        bad_account.data = vec![1u8; 32].try_into().unwrap(); // not empty → init violation
+        // The `init` violation this used to also set up is no longer expressible
+        // here: "the shard is non-empty" needs account data, which a plan does not
+        // receive, so `#[account(init)]` generates no plan-phase check and is
+        // enforced in the apply half instead. The owner-before-signer ordering is
+        // what this test is actually for.
         let accounts = vec![
             make_account_with_owner([3u8; 32], other_program, false), // definition — wrong owner
-            AccountWithMetadata {
-                account_id: nssa_core::account::AccountId::new([4u8; 32]),
-                account: bad_account,
-                is_authorized: false, // not authorized → signer violation
-            },
+            make_account_with_id([4u8; 32], false), // not authorized → signer violation
         ];
         let result = treasury::__validate_initialize_holding(&accounts, &program_id, &empty_ix_data());
         match result.unwrap_err() {

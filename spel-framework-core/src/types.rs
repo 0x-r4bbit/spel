@@ -4,32 +4,35 @@
 //! with real SPEL core types.
 
 use nssa_core::program::{
-    AccountStateDiff, BlockValidityWindow, ChainedCall, InvalidWindow, TimestampValidityWindow,
-    ValidityWindow,
+    BlockValidityWindow, ChainedCall, InvalidWindow, ProgramEvent, ShardEffect,
+    TimestampValidityWindow, ValidityWindow,
 };
 
-/// Trait for types that can be converted into an [`AccountStateDiff`].
+/// What a plan-phase handler returns: the shape of `lee_core`'s `PlanOutput`.
 ///
-/// Implemented for `AccountStateDiff` itself and for `AccountWithMetadata` (which
-/// becomes an unchanged diff), so [`SpelOutput::execute`] accepts either.
+/// A handler accumulates one of these and the generated `main` forwards it to the
+/// real `Plan`. Keeping it a plain value (rather than handing handlers a
+/// `&mut Plan`) is what lets host-side tests call handlers directly and inspect
+/// what they planned without a zkVM.
 ///
-/// Since LEZ v0.2.5 a program reports what it *changed* rather than the account it
-/// ended up with, so a diff can only be built where the pre-state is in hand — in
-/// the handler, not here.
-pub trait IntoStateDiff {
-    fn into_state_diff(self) -> AccountStateDiff;
-}
-
-/// Output from an instruction handler.
+/// There is no "unchanged account" entry any more. Up to LEZ v0.2.5 every
+/// declared account had to appear in the output or the transaction failed with
+/// `DeclaredAccountMissingFromOutput`, so handlers echoed read-only accounts back
+/// as `AccountStateDiff::unchanged`. Under v0.3.0 an account with no effect is
+/// simply untouched, and a shard read without a write is an effect whose apply
+/// returns `None`. Emitting nothing is the correct way to leave a shard alone.
 ///
 /// This struct is `#[non_exhaustive]` to allow future field additions without
 /// breaking external programs that construct it via struct literals.
-/// Use the builder methods (`execute()`, `with_*()`) instead.
+/// Use the builder methods (`plan()`, `effect()`, `guard()`, `with_*()`) instead.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SpelOutput {
-    pub state_diffs: Vec<AccountStateDiff>,
+    /// Per-shard effects, applied in this order.
+    pub effects: Vec<ShardEffect>,
     pub chained_calls: Vec<ChainedCall>,
+    /// Events emitted alongside the plan.
+    pub events: Vec<ProgramEvent>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
 }
@@ -38,11 +41,18 @@ impl SpelOutput {
     /// Create an empty output.
     pub fn empty() -> Self {
         Self {
-            state_diffs: vec![],
+            effects: vec![],
             chained_calls: vec![],
+            events: vec![],
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
         }
+    }
+
+    /// Emit an event alongside the plan.
+    pub fn with_event(mut self, event: ProgramEvent) -> Self {
+        self.events.push(event);
+        self
     }
 
     /// Restrict the block range in which the transaction is valid (infallible).
@@ -102,8 +112,9 @@ impl SpelOutput {
     /// future field additions don't require updating every call site.
     pub fn into_parts(self) -> SpelOutputParts {
         SpelOutputParts {
-            state_diffs: self.state_diffs,
+            effects: self.effects,
             chained_calls: self.chained_calls,
+            events: self.events,
             block_validity_window: self.block_validity_window,
             timestamp_validity_window: self.timestamp_validity_window,
         }
@@ -117,10 +128,12 @@ impl SpelOutput {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct SpelOutputParts {
-    /// Per-account state diffs (balance delta and, when changed, new data).
-    pub state_diffs: Vec<AccountStateDiff>,
+    /// Per-shard effects, in the order the handler emitted them.
+    pub effects: Vec<ShardEffect>,
     /// Chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
+    /// Events emitted alongside the plan.
+    pub events: Vec<ProgramEvent>,
     /// Block range in which the transaction is valid.
     pub block_validity_window: BlockValidityWindow,
     /// Timestamp range in which the transaction is valid.

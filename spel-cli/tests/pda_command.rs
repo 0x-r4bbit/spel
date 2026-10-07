@@ -4,7 +4,7 @@
 use nssa_core::account::AccountId;
 use nssa_core::encryption::ViewingPublicKey;
 use nssa_core::program::PdaSeed;
-use nssa_core::NullifierPublicKey;
+use nssa_core::{Identifier, NullifierPublicKey};
 use std::process::Command;
 
 fn spel(args: &[&str]) -> std::process::Output {
@@ -68,7 +68,17 @@ fn fixture_vpk() -> ViewingPublicKey {
     ViewingPublicKey::from_seed(&[1u8; 32], &[2u8; 32])
 }
 
-fn expected_private_vault(identifier: u128) -> String {
+/// Widen a numeric identifier exactly as the CLI does: right-aligned big-endian
+/// into the 32-byte `Identifier`. Keeping this in the test is deliberate — it is
+/// what proves `--identifier 7` still means seven after LEZ v0.3.0 widened the
+/// type from `u128`.
+fn widen(value: u128) -> Identifier {
+    let mut bytes = [0_u8; 32];
+    bytes[16..].copy_from_slice(&value.to_be_bytes());
+    Identifier::new(bytes)
+}
+
+fn expected_private_vault_id(identifier: Identifier) -> String {
     let program_id = fixture_program_id();
     let seed = vault_seed();
     let npk_bytes: [u8; 32] = hex::decode(NPK_HEX)
@@ -84,6 +94,10 @@ fn expected_private_vault(identifier: u128) -> String {
         identifier,
     )
     .to_string()
+}
+
+fn expected_private_vault(identifier: u128) -> String {
+    expected_private_vault_id(widen(identifier))
 }
 
 fn private_pda_args<'a>(idl: &'a str, vpk_hex: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
@@ -152,6 +166,29 @@ fn private_pda_identifier_accepts_hex_and_u128_max() {
     ));
     assert!(out.status.success(), "stderr: {}", stderr_of(&out));
     assert_eq!(stdout_of(&out), expected_private_vault(u128::MAX));
+}
+
+/// v0.3.0 made `Identifier` a 32-byte value whose canonical form is base58, so
+/// the flag accepts that too — and it reaches values no `u128` could express.
+#[test]
+fn private_pda_identifier_accepts_base58() {
+    let dir = tempfile::tempdir().unwrap();
+    let idl = write_fixture_idl(dir.path());
+    let vpk_hex = hex::encode(fixture_vpk().to_bytes());
+
+    let wide = Identifier::new([0xAB; 32]);
+    let out = spel(&private_pda_args(
+        idl.to_str().unwrap(),
+        &vpk_hex,
+        &["--identifier", &wide.to_string()],
+    ));
+    assert!(out.status.success(), "stderr: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), expected_private_vault_id(wide));
+    assert_ne!(
+        stdout_of(&out),
+        expected_private_vault(0),
+        "a 32-byte identifier must derive a different address than zero"
+    );
 }
 
 #[test]
@@ -375,7 +412,7 @@ fn seed_arg_named_identifier_on_private_pda_uses_default_and_says_so() {
         &PdaSeed::new(expected_slot_seed(5)),
         &NullifierPublicKey(npk_bytes),
         &fixture_vpk(),
-        0,
+        Identifier::ZERO,
     )
     .to_string();
     assert_eq!(
@@ -385,7 +422,8 @@ fn seed_arg_named_identifier_on_private_pda_uses_default_and_says_so() {
     );
     let err = stderr_of(&out);
     assert!(
-        err.contains("seed arg named 'identifier'") && err.contains("identifier 0"),
+        err.contains("seed arg named 'identifier'")
+            && err.contains("default private-PDA identifier (all zero bytes)"),
         "stderr explains the shadowing: {err}"
     );
 }

@@ -208,7 +208,11 @@ mod tests {
         // about signing and tampering, not about instruction encoding.
         let message = Message::new_preserialized(
             AccountId::new([0; 32]),
-            vec![account_id],
+            // A message names shards: (account, owning program) pairs.
+            vec![nssa_core::account::ProgramShardSelector {
+                account_id,
+                program_account_id: AccountId::new([0; 32]),
+            }],
             vec![1_u128.into()],
             vec![1, 2, 3, 4],
             None,
@@ -297,7 +301,11 @@ mod tests {
         let account_id = AccountId::from(&pubkey);
         let tampered = Message::new_preserialized(
             AccountId::new([0; 32]),
-            vec![account_id],
+            // A message names shards: (account, owning program) pairs.
+            vec![nssa_core::account::ProgramShardSelector {
+                account_id,
+                program_account_id: AccountId::new([0; 32]),
+            }],
             vec![1_u128.into()],
             vec![9, 9, 9, 9],
             None,

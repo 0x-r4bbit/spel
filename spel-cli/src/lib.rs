@@ -27,6 +27,7 @@ use cli::{parse_instruction_args, print_help, snake_to_kebab};
 use config::SpelConfig;
 use init::init_project;
 use inspect::inspect_binaries;
+use nssa_core::Identifier;
 use parse::ParsedValue;
 use pda::compute_pda_from_seeds;
 use spel_framework_core::idl::{IdlSeed, SpelIdl};
@@ -384,6 +385,7 @@ pub async fn run() {
                     &idl,
                     type_name.as_ref().unwrap(),
                     data_hex.as_deref(),
+                    program_ref.as_deref(),
                 )
                 .await;
                 return;
@@ -539,7 +541,7 @@ pub async fn run() {
         Some("inspect") => {
             let account_id = remaining_args.get(2).unwrap_or_else(|| {
                 eprintln!(
-                    "Usage: {} inspect <account-id> --idl <IDL> --type <TypeName> [--data <hex>]",
+                    "Usage: {} inspect <account-id> --idl <IDL> --type <TypeName> --program <ID> [--data <hex>]",
                     args[0]
                 );
                 process::exit(1);
@@ -549,6 +551,7 @@ pub async fn run() {
                 &idl,
                 type_name.as_ref().unwrap(),
                 data_hex.as_deref(),
+                program_ref.as_deref(),
             )
             .await;
         },
@@ -856,19 +859,43 @@ fn compute_pda_command(
     }
 }
 
-/// Parse a private-PDA `identifier` from the CLI: decimal digits, or `0x`-prefixed hex.
+/// Widen a numeric identifier into the 32-byte form, right-aligned big-endian.
 ///
-/// Exactly those two forms: no sign, no surrounding whitespace, no separators.
-fn parse_private_pda_identifier(raw: &str) -> Result<u128, String> {
-    const EXPECTED: &str = "expected a u128 as decimal digits or 0x-prefixed hex";
+/// LEZ v0.3.0 made `identifier` a 32-byte `Identifier` rather than a `u128`. This
+/// keeps `--identifier 7` meaning seven, so existing scripts read the same.
+///
+/// It does **not** make addresses compatible: v0.3.0 also changed the private-PDA
+/// hash prefix to `/LEE/v0.3/AccountId/PrivatePDA/` and feeds 32 identifier bytes
+/// into the hash, so every private PDA address moves regardless of this encoding.
+fn identifier_from_u128(value: u128) -> Identifier {
+    let mut bytes = [0_u8; 32];
+    bytes[16..].copy_from_slice(&value.to_be_bytes());
+    Identifier::new(bytes)
+}
+
+/// Parse a private-PDA `identifier` from the CLI.
+///
+/// Three forms, tried in this order:
+/// - decimal digits (`7`), widened by [`identifier_from_u128`]
+/// - `0x`-prefixed hex (`0xff`), likewise
+/// - base58, the canonical 32-byte form that `Identifier` itself displays and parses
+///
+/// The numeric forms come first so pre-v0.3.0 invocations keep their meaning. An
+/// all-digit string is therefore read as decimal, never as base58.
+fn parse_private_pda_identifier(raw: &str) -> Result<Identifier, String> {
+    const EXPECTED: &str =
+        "expected decimal digits, 0x-prefixed hex, or a base58 32-byte identifier";
     let (digits, radix) = match raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
         Some(hex) => (hex, 16),
         None => (raw, 10),
     };
-    if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
-        return Err(EXPECTED.to_string());
+    if !digits.is_empty() && digits.chars().all(|c| c.is_digit(radix)) {
+        if let Ok(value) = u128::from_str_radix(digits, radix) {
+            return Ok(identifier_from_u128(value));
+        }
     }
-    u128::from_str_radix(digits, radix).map_err(|e| format!("{e}; {EXPECTED}"))
+    raw.parse::<Identifier>()
+        .map_err(|e| format!("{e:?}; {EXPECTED}"))
 }
 
 /// Resolve the identifier `spel pda` derives a private PDA with.
@@ -882,7 +909,7 @@ fn resolve_private_pda_identifier(
     is_private: bool,
     identifier_is_seed_arg: bool,
     raw: Option<&str>,
-) -> u128 {
+) -> Identifier {
     if !is_private {
         if raw.is_some() {
             eprintln!(
@@ -894,9 +921,11 @@ fn resolve_private_pda_identifier(
         return DEFAULT_PRIVATE_PDA_IDENTIFIER;
     }
     if identifier_is_seed_arg {
+        // `Identifier` displays as base58, so the all-zero default would print as
+        // `111...1` — accurate but unreadable. Name it instead.
         eprintln!(
-            "⚠️  '{}': the instruction declares a seed arg named 'identifier', so --identifier is that seed; deriving with private-PDA identifier {}",
-            account_name, DEFAULT_PRIVATE_PDA_IDENTIFIER
+            "⚠️  '{}': the instruction declares a seed arg named 'identifier', so --identifier is that seed; deriving with the default private-PDA identifier (all zero bytes)",
+            account_name
         );
         return DEFAULT_PRIVATE_PDA_IDENTIFIER;
     }

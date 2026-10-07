@@ -140,6 +140,35 @@ pub fn plan(_attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_plan_marker(item)
 }
 
+/// Marker attribute for apply-phase functions.
+///
+/// An apply function is the other half of a program: it receives one
+/// [`ShardEffect`]'s payload together with that shard's current bytes, and
+/// returns `Some(data)` to replace them or `None` to leave the shard alone.
+///
+/// ```rust,ignore
+/// #[apply]
+/// pub fn debit(effect: Debit, pre_data: &ShardData) -> Option<ShardData> { .. }
+/// ```
+///
+/// The module macro derives the program's `Effect` enum from these functions —
+/// one variant per function, named after it in PascalCase and wrapping its
+/// effect parameter type — and generates the apply dispatch. A plan emits
+/// `Effect::Debit(Debit { .. })`; the runtime routes it back to `debit`.
+///
+/// Returning `None` is how a **guard** is written: an effect on another program's
+/// shard is read-only, and returning `Some` there is rejected as
+/// `ForeignShardWrite`. Note the runtime does not catch the converse — returning
+/// `Some` from a guard on one of *our own* shards writes it.
+///
+/// Standalone this is a no-op marker, like [`instruction`].
+///
+/// [`ShardEffect`]: https://docs.rs/lee_core/latest/lee_core/program/struct.ShardEffect.html
+#[proc_macro_attribute]
+pub fn apply(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
 /// Shared expansion for [`instruction`] and [`plan`].
 ///
 /// Inside an `#[lez_program]` module this never runs: the module macro consumes
@@ -203,7 +232,7 @@ pub fn generate_idl(input: TokenStream) -> TokenStream {
 /// Parsed info about one instruction function.
 struct InstructionInfo {
     fn_name: Ident,
-    /// Account parameters (AccountWithMetadata type), in order
+    /// Account parameters (AccountMeta type), in order
     accounts: Vec<AccountParam>,
     /// Non-account parameters (the instruction args)
     args: Vec<ArgParam>,
@@ -223,7 +252,7 @@ struct InstructionInfo {
 struct AccountParam {
     name: Ident,
     constraints: AccountConstraints,
-    /// True if this is a Vec<AccountWithMetadata> (variable-length trailing accounts)
+    /// True if this is a Vec<AccountMeta> (variable-length trailing accounts)
     is_rest: bool,
 }
 
@@ -299,8 +328,13 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
     let mut instructions: Vec<InstructionInfo> = Vec::new();
     let mut other_items: Vec<TokenStream2> = Vec::new();
 
+    let mut applies: Vec<ApplyInfo> = Vec::new();
+
     for item in items {
         match item {
+            syn::Item::Fn(func) if has_apply_attr(&func.attrs) => {
+                applies.push(parse_apply(func.clone())?);
+            },
             syn::Item::Fn(func) => {
                 if has_instruction_attr(&func.attrs) {
                     let mut func = func.clone();
@@ -416,70 +450,71 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
     // Generate validation functions
     let validation_fns = generate_validation(&instructions);
 
+    // The apply half: one `Effect` variant and one dispatch arm per #[apply] fn.
+    let effect_enum = generate_effect_enum(&applies);
+    let apply_dispatch = generate_apply_dispatch(mod_name, &applies);
+    let apply_fns: Vec<TokenStream2> = applies
+        .iter()
+        .map(|a| {
+            let func = &a.func;
+            quote! { #func }
+        })
+        .collect();
+
     // Generate main function.
     // `pub fn main` (not just `fn main`) is required so the zkVM linker can find the entry point
     // when this crate is compiled as a guest binary dependency.
     let main_fn = quote! {
         pub fn main() {
-            // Read this invocation from the zkVM host.
-            //
-            // A call kind this build doesn't implement is a no-op, not a rejection:
-            // `respond_unsupported_call` emits the diagnostic event and exits, so a
-            // program deployed today survives a call kind introduced later.
-            let __call = nssa_core::program::read_lee_call::<Instruction>();
-            let nssa_core::program::ProgramCall::Execute(
-                nssa_core::program::ProgramInput {
-                    self_account_id,
-                    caller_account_id,
-                    pre_states,
-                    instruction,
-                },
-                instruction_data,
-            ) = __call else {
-                nssa_core::program::respond_unsupported_call(__call);
-            };
+            // One guest invocation is either a plan or an apply (`CallKind`), and the
+            // same ELF serves both. `read_program_call` decodes the frame and tells us
+            // which; a plan decodes `Instruction`, an apply decodes this program's
+            // `Effect` and receives exactly one shard's bytes.
+            match nssa_core::program::read_program_call::<Instruction>() {
+                nssa_core::program::ProgramCall::Plan(__input, __instruction) => {
+                    // Bind the names handler bodies and generated validation expect.
+                    // `accounts` is `Vec<AccountMeta>`: ids, authorization flags and
+                    // shard selectors, with no account data anywhere.
+                    let self_account_id = __input.self_account_id;
+                    let caller_account_id = __input.caller_account_id;
+                    let instruction_data = __input.instruction_data.clone();
+                    let accounts = __input.accounts.clone();
 
-            // Dispatch to instruction handler
-            let result: Result<
-                spel_framework::SpelOutputParts,
-                spel_framework::error::SpelError
-            > = match instruction {
-                #(#match_arms)*
-            };
+                    let result: Result<
+                        spel_framework::SpelOutputParts,
+                        spel_framework::error::SpelError
+                    > = match __instruction {
+                        #(#match_arms)*
+                    };
 
-            // Handle result
-            let parts = match result {
-                Ok(output) => output,
-                Err(e) => {
-                    panic!("Program error [{}]: {}", e.error_code(), e);
+                    let parts = match result {
+                        Ok(output) => output,
+                        Err(e) => {
+                            panic!("Program error [{}]: {}", e.error_code(), e);
+                        }
+                    };
+
+                    // SpelOutput mirrors PlanOutput field for field, so this is a move
+                    // rather than a translation. Effects are written in the order the
+                    // handler emitted them, which is the order they will be applied.
+                    //
+                    // Note what is absent: up to v0.2.5 every declared account had to
+                    // appear in the output or the transaction failed with
+                    // `DeclaredAccountMissingFromOutput`. Under v0.3.0 an account with
+                    // no effect is simply untouched, so there is nothing to backfill.
+                    let mut __output = nssa_core::program::PlanOutput::new(__input);
+                    __output.effects = parts.effects;
+                    __output.chained_calls = parts.chained_calls;
+                    __output.events = parts.events;
+                    __output.block_validity_window = parts.block_validity_window;
+                    __output.timestamp_validity_window = parts.timestamp_validity_window;
+                    nssa_core::program::GuestOutput::Plan(__output).write();
                 }
-            };
-            let state_diffs = parts.state_diffs;
-            let chained_calls = parts.chained_calls;
-            let block_validity_window = parts.block_validity_window;
-            let timestamp_validity_window = parts.timestamp_validity_window;
 
-            // Every declared account is reported, untouched ones included.
-            //
-            // Up to v0.2.4 this dropped any (pre, post) pair for an account the program
-            // neither owned nor claimed, to satisfy a `validate_execution` rule that
-            // rejected a non-default account returned still default-owned. v0.2.5 removed
-            // that rule and added its opposite: an account the transaction declared but
-            // the output omits fails with `DeclaredAccountMissingFromOutput`. So the
-            // handler's diffs go out as-is — an unchanged account belongs in the output as
-            // `AccountStateDiff::unchanged`, never by being filtered away.
-
-            // Write outputs to zkVM host
-            nssa_core::program::ProgramOutput::new(
-                self_account_id,
-                caller_account_id,
-                instruction_data,
-                state_diffs,
-            )
-            .with_chained_calls(chained_calls)
-            .with_block_validity_window(block_validity_window)
-            .with_timestamp_validity_window(timestamp_validity_window)
-            .write();
+                nssa_core::program::ProgramCall::Apply(__input) => {
+                    #apply_dispatch
+                }
+            }
         }
     };
 
@@ -636,6 +671,7 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
         // The instruction enum (used by both on-chain and client)
         #enum_def
 
+
         // Complete IDL as a const JSON string (accessible from any target)
         pub const PROGRAM_IDL_JSON: &str = #idl_json;
 
@@ -644,11 +680,18 @@ fn expand_lez_program(input: ItemMod, config: ProgramConfig) -> syn::Result<Toke
         pub mod #mod_name {
             use super::*;
 
+            // The effect enum lives here, not at the top level: its variants wrap
+            // payload types the program declares inside this module, and `use
+            // super::*` only carries names the other way.
+            #effect_enum
+
             #slot_assert
 
             #(#other_items)*
 
             #(#handler_fns)*
+
+            #(#apply_fns)*
 
             #(#validation_fns)*
         }
@@ -674,6 +717,129 @@ fn is_plan_attr(attr: &Attribute) -> bool {
 
 fn has_instruction_attr(attrs: &[Attribute]) -> bool {
     attrs.iter().any(is_plan_attr)
+}
+
+fn has_apply_attr(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("apply"))
+}
+
+/// One `#[apply]` function: the `Effect` variant it backs, and its payload type.
+struct ApplyInfo {
+    /// The function to call.
+    fn_name: Ident,
+    /// Its first parameter's type — the variant's payload.
+    effect_ty: Type,
+    /// The original item, re-emitted into the module unchanged.
+    func: ItemFn,
+}
+
+/// Parse an `#[apply]` function: `fn name(effect: SomeType, pre_data: &ShardData) -> ...`.
+fn parse_apply(mut func: ItemFn) -> syn::Result<ApplyInfo> {
+    func.attrs.retain(|a| !a.path().is_ident("apply"));
+
+    let mut inputs = func.sig.inputs.iter();
+    let effect_ty = match inputs.next() {
+        Some(FnArg::Typed(pat_type)) => (*pat_type.ty).clone(),
+        _ => {
+            return Err(syn::Error::new_spanned(
+                &func.sig,
+                "an #[apply] function's first parameter must be its effect payload, \
+                 e.g. `fn debit(effect: Debit, pre_data: &ShardData)`",
+            ))
+        },
+    };
+    if inputs.next().is_none() {
+        return Err(syn::Error::new_spanned(
+            &func.sig,
+            "an #[apply] function needs a second parameter for the shard it applies to, \
+             e.g. `pre_data: &ShardData`",
+        ));
+    }
+
+    Ok(ApplyInfo {
+        fn_name: func.sig.ident.clone(),
+        effect_ty,
+        func,
+    })
+}
+
+/// The program's `Effect` enum: one newtype variant per `#[apply]` function.
+///
+/// Emitted only when the program has apply functions. A program that plans no
+/// effects — every handler returning an empty [`SpelOutput`] — needs no `Effect`
+/// type and gets no apply phase.
+fn generate_effect_enum(applies: &[ApplyInfo]) -> TokenStream2 {
+    if applies.is_empty() {
+        return TokenStream2::new();
+    }
+    let variants: Vec<TokenStream2> = applies
+        .iter()
+        .map(|a| {
+            let variant = to_pascal_case(&a.fn_name);
+            let ty = &a.effect_ty;
+            quote! { #variant(#ty) }
+        })
+        .collect();
+    quote! {
+        /// Per-shard effects this program plans, derived from its `#[apply]` functions.
+        ///
+        /// A plan emits one of these per shard it touches; the runtime calls the
+        /// matching apply function with the variant's payload and that shard's
+        /// current bytes.
+        #[derive(
+            spel_framework::borsh::BorshSerialize,
+            spel_framework::borsh::BorshDeserialize,
+        )]
+        // Same reason as `Instruction`: borsh's derive resolves `borsh` from the
+        // consumer's Cargo.toml, so point it at the framework's re-export. A program
+        // needs no borsh dependency of its own and cannot drift to a version
+        // lee_core does not speak.
+        #[borsh(crate = "spel_framework::borsh")]
+        // Borsh encodes the variant as a leading tag byte, so variants are
+        // append-only here too — but unlike `Instruction` these are internal to the
+        // program, written by its own plan and read by its own apply in the same
+        // transaction, so a reordering cannot break a deployed client.
+        pub enum Effect {
+            #(#variants),*
+        }
+    }
+}
+
+/// The body of the generated `main`'s `CallKind::Apply` branch.
+fn generate_apply_dispatch(mod_name: &Ident, applies: &[ApplyInfo]) -> TokenStream2 {
+    if applies.is_empty() {
+        return quote! {
+            // No #[apply] functions, so this program plans no effects and the
+            // runtime has nothing to route here. Reaching this means a plan
+            // emitted an effect the program cannot apply.
+            let _ = __input;
+            panic!("program has no apply phase: it declares no #[apply] functions");
+        };
+    }
+    let arms: Vec<TokenStream2> = applies
+        .iter()
+        .map(|a| {
+            let variant = to_pascal_case(&a.fn_name);
+            let fn_name = &a.fn_name;
+            quote! {
+                #mod_name::Effect::#variant(__effect) =>
+                    #mod_name::#fn_name(__effect, &__input.pre_data),
+            }
+        })
+        .collect();
+    quote! {
+        // A program only ever applies effects it planned, so a decode failure here
+        // is a framework bug rather than bad input.
+        let __effect: #mod_name::Effect = spel_framework::borsh::from_slice(&__input.effect_data)
+            .expect("an #[apply] effect must decode as this program's Effect");
+        let __post = match __effect {
+            #(#arms)*
+        };
+        match __post {
+            Some(__data) => nssa_core::program::apply_write(__input, __data),
+            None => nssa_core::program::apply_keep(__input),
+        };
+    }
 }
 
 fn parse_instruction(func: ItemFn) -> syn::Result<InstructionInfo> {
@@ -768,16 +934,23 @@ fn extract_param_name(pat_type: &PatType) -> syn::Result<Ident> {
     }
 }
 
+/// Is this parameter one of the plan's account handles?
+///
+/// Since LEZ v0.3.0 that is `AccountMeta` — id, `is_authorized`, and which shard
+/// the handle selects. `AccountWithMetadata` is deliberately *not* accepted: it
+/// carried account data, which a plan no longer receives, so a program still
+/// naming it should fail at the signature rather than be silently handed
+/// something different.
 fn is_account_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "AccountWithMetadata";
+            return segment.ident == "AccountMeta";
         }
     }
     false
 }
 
-/// Check if a type is Vec<AccountWithMetadata> (variable-length account list).
+/// Check if a type is Vec<AccountMeta> (variable-length account list).
 fn is_vec_account_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
@@ -1054,24 +1227,24 @@ fn generate_match_arms(
                 let rest_name = &rest_account.name;
 
                 quote! {
-                    if pre_states.len() < #num_fixed {
+                    if accounts.len() < #num_fixed {
                         panic!(
                             "Account count mismatch: expected at least {}, got {}",
-                            #num_fixed, pre_states.len()
+                            #num_fixed, accounts.len()
                         );
                     }
-                    let (fixed_accounts, rest_accounts) = pre_states.split_at(#num_fixed);
+                    let (fixed_accounts, rest_accounts) = accounts.split_at(#num_fixed);
                     let [#(#fixed_names),*] = <[_; #num_fixed]>::try_from(fixed_accounts.to_vec())
                         .unwrap_or_else(|v: Vec<_>| panic!(
                             "Account count mismatch: expected {}, got {}",
                             #num_fixed, v.len()
                         ));
-                    let #rest_name: Vec<nssa_core::account::AccountWithMetadata> = rest_accounts.to_vec();
+                    let #rest_name: Vec<nssa_core::program::AccountMeta> = rest_accounts.to_vec();
                 }
             } else {
                 let account_names: Vec<&Ident> = ix.accounts.iter().map(|a| &a.name).collect();
                 quote! {
-                    let [#(#account_names),*] = <[_; #num_accounts]>::try_from(pre_states)
+                    let [#(#account_names),*] = <[_; #num_accounts]>::try_from(accounts)
                         .unwrap_or_else(|v: Vec<_>| panic!(
                             "Account count mismatch: expected {}, got {}",
                             #num_accounts, v.len()
@@ -1080,8 +1253,13 @@ fn generate_match_arms(
             };
 
             // Check if this instruction has any validation (signer/init/owner/pda checks)
+            // Must agree with `generate_validation`, which emits nothing when every
+            // check list is empty: `init` is deliberately absent, because since
+            // v0.3.0 it generates no plan-phase check (emptiness is only visible to
+            // the apply half). Counting it here would call a function that was
+            // never defined, for any instruction whose only constraint is `init`.
             let has_validation = ix.accounts.iter().any(|a| {
-                a.constraints.signer || a.constraints.init || a.constraints.owner.is_some() || !a.constraints.pda_seeds.is_empty()
+                a.constraints.signer || a.constraints.owner.is_some() || !a.constraints.pda_seeds.is_empty()
             });
             let validate_fn_name = format_ident!("__validate_{}", ix.fn_name);
 
@@ -1092,9 +1270,12 @@ fn generate_match_arms(
                 // has no caller, which reads as the default (all-zero) program owner.
                 if ix.has_context {
                     args.push(quote! {
+                        // A top-level call has no caller; that reads as the
+                        // all-zero id, as `DEFAULT_PROGRAM_OWNER` did before v0.3.0
+                        // removed it.
                         spel_framework::context::ProgramContext::new(
                             self_account_id,
-                            caller_account_id.unwrap_or(nssa_core::program::DEFAULT_PROGRAM_OWNER)
+                            caller_account_id.unwrap_or(nssa_core::account::AccountId::new([0u8; 32]))
                         )
                     });
                 }
@@ -1199,17 +1380,18 @@ fn generate_match_arms(
                         ).expect("account validation failed");
                     }
                 } else {
-                    let account_refs: Vec<TokenStream2> = ix
-                        .accounts
-                        .iter()
-                        .map(|a| {
-                            let name = &a.name;
-                            quote! { #name }
-                        })
-                        .collect();
+                    let account_names: Vec<&Ident> =
+                        ix.accounts.iter().map(|a| &a.name).collect();
+                    // A single-element `&[x.clone()]` trips
+                    // clippy::cloned_ref_to_slice_refs, which is on by default and
+                    // fires in the user's crate, where they cannot silence it.
+                    let accounts_slice = match account_names.as_slice() {
+                        [only] => quote! { ::core::slice::from_ref(&#only) },
+                        names => quote! { &[#(#names.clone()),*] },
+                    };
                     quote! {
                         #mod_name::#validate_fn_name(
-                            &[#(#account_refs.clone()),*],
+                            #accounts_slice,
                             &self_account_id,
                             &instruction_data,
                             #(#all_extra_args),*
@@ -1324,23 +1506,18 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 })
                 .collect();
 
-            // Generate init checks for accounts with #[account(init)]
-            let init_checks: Vec<TokenStream2> = ix
-                .accounts
-                .iter()
-                .enumerate()
-                .filter(|(_, acc)| acc.constraints.init)
-                .map(|(i, _acc)| {
-                    let idx = i;
-                    quote! {
-                        if accounts[#idx].account != nssa_core::account::Account::default() {
-                            return Err(spel_framework::error::SpelError::AccountAlreadyInitialized {
-                                account_index: #idx,
-                            });
-                        }
-                    }
-                })
-                .collect();
+            // `#[account(init)]` generates no plan-phase check.
+            //
+            // "This account is fresh" was `account != Account::default()`, which needs
+            // account data. A plan receives only `AccountMeta`, so the question cannot
+            // be asked here — and it is the wrong question anyway: under v0.3.0 an
+            // address is not owned, so what matters is whether *this program's shard*
+            // of it is empty. That is `pre_data.is_empty()`, asked in the apply half,
+            // where `lee_core::program::write_once` is the canonical guard.
+            //
+            // The constraint is still carried into the IDL, because clients use it to
+            // decide which accounts a transaction must create.
+            let init_checks: Vec<TokenStream2> = Vec::new();
 
             // Generate owner checks for accounts with #[account(owner = expr)]
             let owner_checks: Vec<TokenStream2> = ix
@@ -1351,9 +1528,19 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
                 .map(|(i, acc, owner_expr)| {
                     let idx = i;
                     let acc_name = acc.name.to_string();
+                    // Ownership is no longer a field on the account: a shard *is* keyed
+                    // by the program that owns it, so `owner = X` is the question "does
+                    // this handle select X's shard?" — answered by the selector the
+                    // caller passed, with no data needed.
+                    //
+                    // This is strictly stronger than the v0.2.5 check. Then, a matching
+                    // `program_owner` meant the account had at some point been claimed
+                    // by X. Now, bytes under key X can only have been written by X, so a
+                    // matching selector makes the provenance structural.
+                    //
                     // self_account_id is passed as &AccountId; deref for comparison.
                     quote! {
-                        if accounts[#idx].account.program_owner != *#owner_expr {
+                        if accounts[#idx].program_account_id != *#owner_expr {
                             return Err(spel_framework::error::SpelError::AccountOwnerMismatch {
                                 account_name: #acc_name.to_string(),
                             });
@@ -1506,7 +1693,7 @@ fn generate_validation(instructions: &[InstructionInfo]) -> Vec<TokenStream2> {
             quote! {
                 #[allow(dead_code)]
                 pub fn #fn_name(
-                    accounts: &[nssa_core::account::AccountWithMetadata],
+                    accounts: &[nssa_core::program::AccountMeta],
                     self_account_id: &nssa_core::account::AccountId,
                     // Retained for future use (e.g. instruction-level replay protection or
                     // content-based dispatch). Not used in validation logic today.

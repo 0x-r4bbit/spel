@@ -17,7 +17,10 @@ fn sign_prompt_decodes_operative_content_from_the_bytes() {
     let account_id = AccountId::from(&pubkey);
     let message = Message::new_preserialized(
         AccountId::new([0; 32]),
-        vec![account_id],
+        vec![nssa_core::account::ProgramShardSelector {
+            account_id,
+            program_account_id: AccountId::new([0; 32]),
+        }],
         vec![1_u128.into()],
         vec![1, 2, 3, 4],
         None,

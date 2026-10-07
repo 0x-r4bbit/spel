@@ -3,34 +3,45 @@
 //! This is an expansion test — we simulate the validation functions that the macro
 //! would generate for owner constraints.
 
-use nssa_core::account::{Account, AccountId, AccountWithMetadata};
+use nssa_core::account::AccountId;
+use nssa_core::program::AccountMeta;
 
 use spel_framework_core::error::SpelError;
 
 /// Simulate the validation function that the macro would generate for:
 /// ```
-/// #[instruction]
+/// #[plan]
 /// pub fn initialize_holding(
 ///     ctx: ProgramContext,
 ///     #[account(owner = self_program_id)]
-///     definition_account: AccountWithMetadata,
+///     definition_account: AccountMeta,
 ///     #[account(init, signer)]
-///     holding_account: AccountWithMetadata,
+///     holding_account: AccountMeta,
 /// ) -> SpelResult { ... }
 /// ```
+///
+/// Note what is *not* here: `#[account(init)]` no longer generates a plan-phase
+/// check. "This account is fresh" was `account != Account::default()`, which needs
+/// account data a plan does not receive — and it is the wrong question now, since
+/// an address is not owned. What matters is whether *this program's shard* of it is
+/// empty, which is `pre_data.is_empty()` in the apply half, where
+/// `lee_core::program::write_once` is the canonical guard. The constraint still
+/// reaches the IDL, because clients use it to decide what a transaction must create.
 fn __validate_initialize_holding(
-    accounts: &[AccountWithMetadata],
+    accounts: &[AccountMeta],
     self_account_id: &AccountId,
 ) -> Result<(), SpelError> {
-    // Account index 0 has #[account(owner = self_program_id)]
-    if accounts[0].account.program_owner != *self_account_id {
+    // Account index 0 has #[account(owner = self_program_id)].
+    //
+    // Ownership is no longer a field: a shard is keyed by the program that owns
+    // it, so this asks whether the handle selects *our* shard. That is strictly
+    // stronger than the v0.2.5 check — bytes under our key can only have been
+    // written by us, so matching the selector makes provenance structural rather
+    // than historical.
+    if accounts[0].program_account_id != *self_account_id {
         return Err(SpelError::AccountOwnerMismatch {
             account_name: "definition_account".to_string(),
         });
-    }
-    // Account index 1 has #[account(init)]
-    if accounts[1].account != Account::default() {
-        return Err(SpelError::AccountAlreadyInitialized { account_index: 1 });
     }
     // Account index 1 has #[account(signer)]
     if !accounts[1].is_authorized {
@@ -49,34 +60,9 @@ fn make_program_id(bytes: [u8; 32]) -> AccountId {
     AccountId::new(bytes)
 }
 
-fn make_account_with_owner(
-    id: [u8; 32],
-    owner: AccountId,
-    authorized: bool,
-) -> AccountWithMetadata {
-    let mut account = Account::default();
-    account.program_owner = owner;
-    AccountWithMetadata {
-        account_id: AccountId::new(id),
-        account,
-        is_authorized: authorized,
-    }
-}
-
-fn make_initialized_account_with_owner(
-    id: [u8; 32],
-    owner: AccountId,
-    data: Vec<u8>,
-    authorized: bool,
-) -> AccountWithMetadata {
-    let mut account = Account::default();
-    account.program_owner = owner;
-    account.data = data.try_into().unwrap();
-    AccountWithMetadata {
-        account_id: AccountId::new(id),
-        account,
-        is_authorized: authorized,
-    }
+/// A handle selecting `owner`'s shard of `id`.
+fn make_account_with_owner(id: [u8; 32], owner: AccountId, authorized: bool) -> AccountMeta {
+    AccountMeta::new(AccountId::new(id), authorized, owner)
 }
 
 #[test]
@@ -111,19 +97,20 @@ fn test_owner_mismatch_returns_error() {
 }
 
 #[test]
-fn test_owner_check_runs_before_init_and_signer() {
-    // Owner check is first in the validation chain.
-    // Even if init and signer are also wrong, owner error should surface first.
+fn test_owner_check_runs_before_signer() {
+    // Owner check is first in the validation chain, so it surfaces even when the
+    // signer check would also fail. The `init` half of this test is gone: a
+    // non-empty shard is not expressible in a plan and no longer checked here.
     let program_id = make_program_id([1u8; 32]);
     let other_program = make_program_id([99u8; 32]);
     let accounts = vec![
         // definition_account owned by DIFFERENT program ✗
         make_account_with_owner([2u8; 32], other_program, false),
-        // holding_account: NOT empty (init violated) and NOT authorized (signer violated)
-        make_initialized_account_with_owner([3u8; 32], AccountId::default(), vec![1u8; 32], false),
+        // holding_account: NOT authorized (signer violated)
+        make_account_with_owner([3u8; 32], AccountId::default(), false),
     ];
     let result = __validate_initialize_holding(&accounts, &program_id);
-    // Owner check runs first, so we should get AccountOwnerMismatch, not init/signer errors.
+    // Owner check runs first, so we get AccountOwnerMismatch, not the signer error.
     match result.unwrap_err() {
         SpelError::AccountOwnerMismatch { account_name } => {
             assert_eq!(account_name, "definition_account");

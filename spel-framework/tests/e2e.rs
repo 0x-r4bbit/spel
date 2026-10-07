@@ -57,12 +57,30 @@ fn e2e_idl_generation() {
     // Top-level fields
     assert_eq!(idl.version, "0.1.0");
     assert_eq!(idl.name, "treasury");
-    assert_eq!(idl.instructions.len(), 12);
+    assert_eq!(idl.instructions.len(), 13);
 
-    // The fixture marks instructions 0-2 with `#[plan]` and 3-11 with
-    // `#[instruction]`. The two are synonyms, so the count above proves both
-    // spellings are discovered, and the per-instruction checks below cover three
-    // of each. Keep the mix in the fixture or this coverage goes away.
+    // The fixture deliberately mixes the two synonymous plan markers — `#[plan]`
+    // on instructions 0-2 and `bump_counter`, `#[instruction]` on the rest — so
+    // the count above proves both spellings are discovered, and the
+    // per-instruction checks below cover three of each. Keep the mix or this
+    // coverage goes away.
+    //
+    // `bump_counter` is also the only instruction here that reaches the apply
+    // phase: it emits an effect, so it exercises the generated `Effect` enum and
+    // apply dispatch. Its `ProgramContext` parameter is injected by the
+    // dispatcher and must not appear in the IDL.
+    let bump = idl
+        .instructions
+        .iter()
+        .find(|i| i.name == "bump_counter")
+        .expect("bump_counter should be in the IDL");
+    assert_eq!(bump.accounts.len(), 1, "only the counter shard");
+    assert_eq!(
+        bump.args.len(),
+        1,
+        "amount only — ProgramContext is not part of the ABI"
+    );
+    assert_eq!(bump.args[0].name, "amount");
 
     // initialize instruction (#[plan])
     let init = &idl.instructions[0];

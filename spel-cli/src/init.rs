@@ -4,7 +4,11 @@ use std::fs;
 use std::path::Path;
 
 /// LEZ tag a scaffold pins when neither `--lez-tag` nor `--lez-rev` is given.
-pub const DEFAULT_LEZ_TAG: &str = "v0.2.4";
+///
+/// Must track the tag `spel-framework` itself pins. A scaffold that names a
+/// different one resolves two copies of `lee_core` from two git sources, and the
+/// guest then fails to build on types that look identical but are not.
+pub const DEFAULT_LEZ_TAG: &str = "v0.3.0";
 
 /// Framework branch a scaffold pins when neither `--spel-tag` nor `--spel-rev`
 /// is given.
@@ -750,52 +754,89 @@ ruint = "=1.17.0"
             r#"#![no_main]
 
 use spel_framework::prelude::*;
-use nssa_core::account::Data;
 
 risc0_zkvm::guest::entry!(main);
 
+// A v0.3.0 program runs in two phases. `#[plan]` declares which shards an
+// instruction touches and what to do to each; `#[apply]` is handed one shard's
+// current bytes and returns their replacement. The plan sees no account data at
+// all, so every value it commits to has to come from the instruction or from a
+// shard it pins — never from a read.
 #[lez_program]
 mod {snake_name} {{
     #[allow(unused_imports)]
     use super::*;
 
-    /// Program state stored in a PDA account.
+    /// Program state, stored in this program's shard of the state PDA.
     #[derive(BorshSerialize, BorshDeserialize)]
+    #[borsh(crate = "spel_framework::borsh")]
     #[account_type]
     pub struct ProgramState {{
         pub initialized: bool,
         pub owner: [u8; 32],
     }}
 
+    /// What [`initialize`] asks the apply phase to write.
+    #[derive(BorshSerialize, BorshDeserialize)]
+    #[borsh(crate = "spel_framework::borsh")]
+    pub struct Init {{
+        pub owner: [u8; 32],
+    }}
+
     /// Initialize the program state.
-    #[instruction]
+    #[plan]
     pub fn initialize(
-        _ctx: ProgramContext,
+        ctx: ProgramContext,
         #[account(init, pda = literal("state"))]
-        mut state: AccountWithMetadata,
+        state: AccountMeta,
         #[account(signer)]
-        owner: AccountWithMetadata,
+        owner: AccountMeta,
     ) -> SpelResult {{
-        let ps = ProgramState {{
+        Ok(SpelOutput::empty().effect(
+            &state,
+            ctx.self_account_id,
+            &Effect::InitState(Init {{
+                owner: *owner.account_id.value(),
+            }}),
+        ))
+    }}
+
+    /// Apply half of [`initialize`]: write the state, once.
+    ///
+    /// `write_once` panics if the shard already holds different bytes. It is the
+    /// guard that replaces `#[account(init)]`, which can no longer be checked in
+    /// the plan phase because nothing there can see whether a shard is empty.
+    #[apply]
+    pub fn init_state(effect: Init, pre_data: &ShardData) -> Option<ShardData> {{
+        let state = ProgramState {{
             initialized: true,
-            owner: *owner.account_id.value(),
+            owner: effect.owner,
         }};
-        let bytes = borsh::to_vec(&ps).map_err(|e| SpelError::custom(999, format!("borsh error: {{e}}")))?;
-        state.account.data = Data::try_from(bytes).map_err(|_| SpelError::custom(999, "data too big"))?;
-        Ok(SpelOutput::execute(vec![state, owner], vec![]))
+        let bytes = borsh::to_vec(&state).expect("ProgramState serializes");
+        Some(
+            ShardData::try_from(write_once(pre_data, bytes))
+                .expect("ProgramState fits under DATA_MAX_LENGTH"),
+        )
     }}
 
     /// Example instruction — replace with your own.
-    #[instruction]
+    ///
+    /// Declares no effects yet, so it changes nothing. Drop the leading
+    /// underscores once you use the accounts:
+    ///
+    /// ```ignore
+    /// Ok(SpelOutput::empty().effect(&state, ctx.self_account_id, &Effect::..))
+    /// ```
+    #[plan]
     pub fn do_something(
+        _ctx: ProgramContext,
         #[account(mut, pda = literal("state"))]
-        state: AccountWithMetadata,
+        _state: AccountMeta,
         #[account(signer)]
-        owner: AccountWithMetadata,
+        _owner: AccountMeta,
         _amount: u64,
     ) -> SpelResult {{
-        // TODO: implement your logic
-        Ok(SpelOutput::execute(vec![state, owner], vec![]))
+        Ok(SpelOutput::empty())
     }}
 }}
 "#

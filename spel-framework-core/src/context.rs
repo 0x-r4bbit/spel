@@ -18,7 +18,7 @@ use crate::prelude::AccountId;
 /// pub fn initialize(
 ///     ctx: ProgramContext,
 ///     #[account(owner = self_account_id)]
-///     definition: AccountWithMetadata,
+///     definition: AccountMeta,
 /// ) -> SpelResult {
 ///     // ctx.self_account_id is the currently executing program
 /// }
@@ -31,8 +31,8 @@ pub struct ProgramContext {
     /// The account ID of the currently executing program.
     pub self_account_id: AccountId,
     /// The account ID of the caller (the program that invoked this one).
-    /// If there is no explicit caller (e.g. top-level transaction),
-    /// this is set to [`nssa_core::program::DEFAULT_PROGRAM_OWNER`] (all zeros).
+    /// If there is no explicit caller (e.g. top-level transaction), this is the
+    /// all-zero id, as `DEFAULT_PROGRAM_OWNER` was before LEZ v0.3.0 removed it.
     pub caller_account_id: AccountId,
 }
 

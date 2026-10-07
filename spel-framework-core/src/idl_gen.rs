@@ -855,10 +855,19 @@ fn is_context_type(ty: &Type) -> bool {
     false
 }
 
+/// Whether a parameter is an account slot rather than an instruction argument.
+///
+/// Must stay in step with the macro's own copy of this check
+/// (`spel-framework-macros`): the macro decides what the *program* treats as an
+/// account, this decides what the *IDL* says, and a disagreement silently
+/// reclassifies every account as an argument. v0.2.5's `AccountMeta` is
+/// deliberately not accepted — the macro rejects it outright, so a source still
+/// using it cannot build, and describing it here would only produce an IDL for a
+/// program that does not exist.
 fn is_account_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
         if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "AccountWithMetadata";
+            return segment.ident == "AccountMeta";
         }
     }
     false
@@ -1171,7 +1180,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod my_token {
                 #[instruction]
-                pub fn transfer(sender: AccountWithMetadata, recipient: AccountWithMetadata) {}
+                pub fn transfer(sender: AccountMeta, recipient: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1186,7 +1195,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program(instruction = "my_core::Instruction")]
             pub mod my_program {
                 #[instruction]
-                pub fn do_thing(account: AccountWithMetadata) {}
+                pub fn do_thing(account: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1204,7 +1213,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata) {}
+                pub fn ix(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1223,7 +1232,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(mut)] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(mut)] acc: AccountMeta) {}
             }
         "#;
         let acc = &ok(src).instructions[0].accounts[0];
@@ -1238,7 +1247,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(signer)] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(signer)] acc: AccountMeta) {}
             }
         "#;
         let acc = &ok(src).instructions[0].accounts[0];
@@ -1252,7 +1261,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(init)] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(init)] acc: AccountMeta) {}
             }
         "#;
         let acc = &ok(src).instructions[0].accounts[0];
@@ -1266,7 +1275,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(mut, signer)] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(mut, signer)] acc: AccountMeta) {}
             }
         "#;
         let acc = &ok(src).instructions[0].accounts[0];
@@ -1282,7 +1291,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(pda = seed_const("pool"))] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(pda = seed_const("pool"))] acc: AccountMeta) {}
             }
         "#;
         let acc = &ok(src).instructions[0].accounts[0];
@@ -1297,7 +1306,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(pda = account("owner.id"))] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(pda = account("owner.id"))] acc: AccountMeta) {}
             }
         "#;
         let pda = ok(src).instructions[0].accounts[0].pda.clone().unwrap();
@@ -1310,7 +1319,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(#[account(pda = arg("pool_id"))] acc: AccountWithMetadata) {}
+                pub fn ix(#[account(pda = arg("pool_id"))] acc: AccountMeta) {}
             }
         "#;
         let pda = ok(src).instructions[0].accounts[0].pda.clone().unwrap();
@@ -1325,7 +1334,7 @@ pub struct Hidden { pub x: u8 }
                 #[instruction]
                 pub fn ix(
                     #[account(pda = [seed_const("amm"), account("base.id"), arg("quote_id")])]
-                    acc: AccountWithMetadata,
+                    acc: AccountMeta,
                 ) {}
             }
         "#;
@@ -1336,7 +1345,7 @@ pub struct Hidden { pub x: u8 }
         assert!(matches!(&pda.seeds[2], IdlSeed::Arg { path } if path == "quote_id"));
     }
 
-    // ── Rest accounts (Vec<AccountWithMetadata>) ──────────────────────────────
+    // ── Rest accounts (Vec<AccountMeta>) ──────────────────────────────
 
     #[test]
     fn vec_account_sets_rest_flag() {
@@ -1344,13 +1353,13 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(single: AccountWithMetadata, rest: Vec<AccountWithMetadata>) {}
+                pub fn ix(single: AccountMeta, rest: Vec<AccountMeta>) {}
             }
         "#;
         let accounts = &ok(src).instructions[0].accounts;
         assert_eq!(accounts.len(), 2);
         assert!(!accounts[0].rest, "single account should not be rest");
-        assert!(accounts[1].rest, "Vec<AccountWithMetadata> should be rest");
+        assert!(accounts[1].rest, "Vec<AccountMeta> should be rest");
     }
 
     // ── Instruction args ──────────────────────────────────────────────────────
@@ -1362,7 +1371,7 @@ pub struct Hidden { pub x: u8 }
             pub mod prog {
                 #[instruction]
                 pub fn ix(
-                    acc: AccountWithMetadata,
+                    acc: AccountMeta,
                     a: u64,
                     b: u32,
                     c: bool,
@@ -1384,7 +1393,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, ids: Vec<u64>) {}
+                pub fn ix(acc: AccountMeta, ids: Vec<u64>) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1400,7 +1409,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, maybe: Option<u32>) {}
+                pub fn ix(acc: AccountMeta, maybe: Option<u32>) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1415,7 +1424,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, data: [u8; 32]) {}
+                pub fn ix(acc: AccountMeta, data: [u8; 32]) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1431,7 +1440,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, config: MyConfig) {}
+                pub fn ix(acc: AccountMeta, config: MyConfig) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1444,7 +1453,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, prog: ProgramId) {}
+                pub fn ix(acc: AccountMeta, prog: ProgramId) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1457,7 +1466,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(acc: AccountWithMetadata, id: AccountId) {}
+                pub fn ix(acc: AccountMeta, id: AccountId) {}
             }
         "#;
         let args = &ok(src).instructions[0].args;
@@ -1470,7 +1479,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn ix(ctx: ProgramContext, acc: AccountWithMetadata, amount: u64) {}
+                pub fn ix(ctx: ProgramContext, acc: AccountMeta, amount: u64) {}
             }
         "#;
         let idl = ok(src);
@@ -1488,12 +1497,12 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn alpha(acc: AccountWithMetadata) {}
+                pub fn alpha(acc: AccountMeta) {}
 
-                pub fn not_an_instruction(acc: AccountWithMetadata) {}
+                pub fn not_an_instruction(acc: AccountMeta) {}
 
                 #[instruction]
-                pub fn beta(acc: AccountWithMetadata, amount: u64) {}
+                pub fn beta(acc: AccountMeta, amount: u64) {}
             }
         "#;
         let idl = ok(src);
@@ -1521,7 +1530,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1545,7 +1554,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1567,7 +1576,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1586,7 +1595,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1612,7 +1621,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1637,7 +1646,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1665,7 +1674,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1691,7 +1700,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);
@@ -1721,7 +1730,7 @@ pub struct Hidden { pub x: u8 }
             #[lez_program]
             pub mod prog {
                 #[instruction]
-                pub fn init(acc: AccountWithMetadata) {}
+                pub fn init(acc: AccountMeta) {}
             }
         "#;
         let idl = ok(src);

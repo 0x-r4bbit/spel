@@ -9,11 +9,15 @@ use crate::hex::{decode_bytes_32, hex_decode, hex_encode};
 
 /// Inspect an on-chain account: fetch its data, borsh-decode it using the IDL
 /// type definition, and print the result as JSON.
+/// `program_id_str` names which shard to read: an account holds one `ShardData`
+/// per program since LEZ v0.3.0, so there is no single "the account's data". It is
+/// required unless `--data` supplies the bytes directly.
 pub async fn inspect_account(
     account_id_str: &str,
     idl: &SpelIdl,
     type_name: &str,
     data_hex: Option<&str>,
+    program_id_str: Option<&str>,
 ) {
     // Parse account ID (base58 or hex)
     let account_bytes = decode_bytes_32(account_id_str).unwrap_or_else(|e| {
@@ -29,7 +33,22 @@ pub async fn inspect_account(
             process::exit(1);
         })
     } else {
-        fetch_account_data(account_id).await
+        let program_id_str = program_id_str.unwrap_or_else(|| {
+            eprintln!(
+                "--program <ID> is required to inspect on-chain data: an account holds one \
+                 shard per program since LEZ v0.3.0, so which program's shard to decode must \
+                 be named. (Not needed with --data, which supplies the bytes directly.)"
+            );
+            process::exit(1);
+        });
+        let program_bytes = decode_bytes_32(program_id_str).unwrap_or_else(|e| {
+            eprintln!(
+                "Invalid --program '{}': {}; expected a 32-byte program account id as hex or base58",
+                program_id_str, e
+            );
+            process::exit(1);
+        });
+        fetch_account_data(account_id, nssa::AccountId::new(program_bytes)).await
     };
 
     eprintln!("Account: {}", account_id);
@@ -62,7 +81,10 @@ pub async fn inspect_account(
     }
 }
 
-async fn fetch_account_data(account_id: nssa::AccountId) -> Vec<u8> {
+async fn fetch_account_data(
+    account_id: nssa::AccountId,
+    program_account_id: nssa::AccountId,
+) -> Vec<u8> {
     let wallet_core = wallet::WalletCore::from_env().await.unwrap_or_else(|e| {
         eprintln!("Failed to initialize wallet: {:?}", e);
         eprintln!("Set LEE_WALLET_HOME_DIR or use --data <hex>");
@@ -77,5 +99,7 @@ async fn fetch_account_data(account_id: nssa::AccountId) -> Vec<u8> {
             process::exit(1);
         });
 
-    account.data.to_vec()
+    // One shard per program; an absent shard reads as empty, which the caller
+    // reports as "account may not exist or has no data".
+    account.data.shard(program_account_id).to_vec()
 }

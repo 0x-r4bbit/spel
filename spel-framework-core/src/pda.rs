@@ -4,7 +4,7 @@ use base58::FromBase58;
 use nssa_core::account::AccountId;
 use nssa_core::encryption::ViewingPublicKey;
 use nssa_core::program::PdaSeed;
-use nssa_core::NullifierPublicKey;
+use nssa_core::{Identifier, NullifierPublicKey};
 use sha2::{Digest, Sha256};
 
 /// Trait for converting a value into a 32-byte PDA seed.
@@ -91,12 +91,14 @@ pub fn compute_pda(account_id: &AccountId, seeds: &[&[u8; 32]]) -> AccountId {
     AccountId::for_public_pda(account_id, &pda_seed)
 }
 
-/// The private-PDA `identifier` for single-purpose PDAs: `0`.
+/// The private-PDA `identifier` for single-purpose PDAs: all zero bytes.
 ///
-/// LEZ v0.2.x includes a `u128` identifier in private-PDA derivation so one
+/// LEZ includes an identifier in private-PDA derivation so one
 /// `(program, seed, npk, vpk)` tuple can own several addresses. The framework's
-/// `#[account(private_pda, ...)]` validation uses this value.
-pub const DEFAULT_PRIVATE_PDA_IDENTIFIER: u128 = 0;
+/// `#[account(private_pda, ...)]` validation uses this value, since the attribute
+/// has no `identifier` constraint; non-zero identifiers need hand-written
+/// validation.
+pub const DEFAULT_PRIVATE_PDA_IDENTIFIER: Identifier = Identifier::ZERO;
 
 /// Derive a **private** PDA `AccountId` from a program's account ID, one or more 32-byte seeds,
 /// a `NullifierPublicKey`, a `ViewingPublicKey`, and the `identifier`.
@@ -110,6 +112,12 @@ pub const DEFAULT_PRIVATE_PDA_IDENTIFIER: u128 = 0;
 /// Since LEZ v0.2.1 the derivation formula is:
 /// `SHA256(prefix || account_id || seed || npk || vpk || identifier)`
 ///
+/// LEZ v0.3.0 widened `identifier` from a `u128` to the 32-byte
+/// [`Identifier`](nssa_core::Identifier) newtype, and changed the hash prefix to
+/// `/LEE/v0.3/AccountId/PrivatePDA/`, so **every private PDA address derived
+/// before v0.3.0 moves** — including those a `u128` identifier would have
+/// produced under the same seed.
+///
 /// # Panics
 ///
 /// Panics if `seeds` is empty.
@@ -118,7 +126,7 @@ pub fn compute_private_pda(
     seeds: &[&[u8; 32]],
     npk: &NullifierPublicKey,
     vpk: &ViewingPublicKey,
-    identifier: u128,
+    identifier: Identifier,
 ) -> AccountId {
     assert!(!seeds.is_empty(), "PDA requires at least one seed");
 
@@ -500,7 +508,8 @@ mod tests {
 
     #[test]
     fn test_default_private_pda_identifier_is_zero() {
-        assert_eq!(DEFAULT_PRIVATE_PDA_IDENTIFIER, 0);
+        assert_eq!(DEFAULT_PRIVATE_PDA_IDENTIFIER, Identifier::ZERO);
+        assert_eq!(DEFAULT_PRIVATE_PDA_IDENTIFIER.value(), &[0u8; 32]);
     }
 
     #[test]
@@ -509,7 +518,10 @@ mod tests {
         let seed = seed_from_str("vault");
         let npk = NullifierPublicKey([0xABu8; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1u8; 32], &[2u8; 32]);
-        let identifier: u128 = 0xDEAD_BEEF_0000_0000_0000_0000_0000_0001;
+        let mut id_bytes = [0u8; 32];
+        id_bytes[0] = 0xDE;
+        id_bytes[31] = 0x01;
+        let identifier = Identifier::new(id_bytes);
 
         let derived = compute_private_pda(&program_id, &[&seed], &npk, &vpk, identifier);
         let expected =
@@ -524,16 +536,25 @@ mod tests {
         let npk = NullifierPublicKey([0xABu8; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1u8; 32], &[2u8; 32]);
 
-        let id0 = compute_private_pda(&program_id, &[&seed], &npk, &vpk, 0);
-        let id1 = compute_private_pda(&program_id, &[&seed], &npk, &vpk, 1);
-        let id_max = compute_private_pda(&program_id, &[&seed], &npk, &vpk, u128::MAX);
+        let mut one = [0u8; 32];
+        one[31] = 1;
+
+        let id0 = compute_private_pda(&program_id, &[&seed], &npk, &vpk, Identifier::ZERO);
+        let id1 = compute_private_pda(&program_id, &[&seed], &npk, &vpk, Identifier::new(one));
+        let id_max = compute_private_pda(
+            &program_id,
+            &[&seed],
+            &npk,
+            &vpk,
+            Identifier::new([0xFF; 32]),
+        );
         assert_ne!(
             id0, id1,
             "identifier 0 and 1 must derive different addresses"
         );
         assert_ne!(
             id1, id_max,
-            "identifier 1 and u128::MAX must derive different addresses"
+            "identifier 1 and all-ones must derive different addresses"
         );
     }
 
@@ -545,13 +566,22 @@ mod tests {
         let npk = NullifierPublicKey([0xABu8; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1u8; 32], &[2u8; 32]);
 
-        let derived = compute_private_pda(&program_id, &[&s1, &s2], &npk, &vpk, 42);
+        let mut id_bytes = [0u8; 32];
+        id_bytes[31] = 42;
+        let identifier = Identifier::new(id_bytes);
+
+        let derived = compute_private_pda(&program_id, &[&s1, &s2], &npk, &vpk, identifier);
         let mut hasher = Sha256::new();
         hasher.update(s1);
         hasher.update(s2);
         let combined: [u8; 32] = hasher.finalize().into();
-        let expected =
-            AccountId::for_private_pda(&program_id, &PdaSeed::new(combined), &npk, &vpk, 42);
+        let expected = AccountId::for_private_pda(
+            &program_id,
+            &PdaSeed::new(combined),
+            &npk,
+            &vpk,
+            identifier,
+        );
         assert_eq!(derived, expected);
     }
 }

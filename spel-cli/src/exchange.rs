@@ -70,9 +70,15 @@ pub async fn sign_command(path: &str) {
         ),
         None => println!("Fee: none (fee-exempt)"),
     }
-    println!("Accounts:");
-    for id in &message.account_ids {
-        println!("  0x{}", hex_encode(id.value()));
+    // A message names shards, not accounts: each entry pairs an account with the
+    // program whose slice of it the transaction may touch.
+    println!("Shards:");
+    for selector in &message.shard_selectors {
+        println!(
+            "  0x{} (program 0x{})",
+            hex_encode(selector.account_id.value()),
+            hex_encode(selector.program_account_id.value())
+        );
     }
     // Nonces pair with the signers list, not with the accounts above.
     println!("Signer nonces:");

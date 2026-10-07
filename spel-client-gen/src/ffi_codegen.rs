@@ -516,7 +516,15 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
         writeln!(out, "        }}").unwrap();
         writeln!(
             out,
-            "        let message = Message::try_new(program_id, account_ids, nonces, instruction)"
+            "        let shard_selectors: Vec<nssa_core::account::ProgramShardSelector> = account_ids"
+    )
+    .unwrap();
+        writeln!(out, "            .iter()").unwrap();
+        writeln!(out, "            .map(|id| nssa_core::account::ProgramShardSelector {{ account_id: *id, program_account_id: program_id }})").unwrap();
+        writeln!(out, "            .collect();").unwrap();
+        writeln!(
+        out,
+        "        let message = Message::try_new(program_id, shard_selectors, nonces, instruction)"
         )
         .unwrap();
         writeln!(
@@ -705,29 +713,39 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
         "    let has_key = wallet.get_account_public_signing_key(account_id).is_some();"
     )
     .unwrap();
-    writeln!(out, "    let data_len = account.data.len();").unwrap();
+    // Shard classification.
+    //
+    // An account is a `BTreeMap<AccountId, ShardData>` since LEZ v0.3.0, so there
+    // is no single "the data" and no single owner. What a caller can ask is "what
+    // does program X hold here?", which needs the program id it already passes as
+    // `program_id_hex`. `shards` is reported alongside so a caller can see which
+    // programs have written to the account at all.
+    writeln!(
+        out,
+        "    let maybe_program_id_early = v[\"program_id_hex\"].as_str()"
+    )
+    .unwrap();
+    writeln!(out, "        .filter(|s| !s.is_empty())").unwrap();
+    writeln!(out, "        .map(|s| parse_program_id_hex(s))").unwrap();
+    writeln!(out, "        .transpose()?;").unwrap();
+    writeln!(
+        out,
+        "    let shard = maybe_program_id_early.map(|pid| account.data.shard(pid));"
+    )
+    .unwrap();
+    writeln!(out, "    let data_len = shard.map_or(0, |s| s.len());").unwrap();
     writeln!(out, "    let preview_len = data_len.min(32);").unwrap();
     writeln!(
         out,
-        "    let data_preview = hex::encode(&account.data[..preview_len]);"
-    )
-    .unwrap();
-    // program_owner classification
-    writeln!(
-        out,
-        "    let owner_bytes: Vec<u8> = account.program_owner.as_ref().to_vec();"
+        "    let data_preview = shard.map_or(String::new(), |s| hex::encode(&s[..preview_len]));"
     )
     .unwrap();
     writeln!(
         out,
-        "    let program_owner_hex = hex::encode(&owner_bytes);"
+        "    let shards: Vec<String> = account.data.shards.keys().map(|k| hex::encode(k.as_ref())).collect();"
     )
     .unwrap();
-    writeln!(
-        out,
-        "    let is_uninitialized = account.program_owner == nssa_core::program::DEFAULT_PROGRAM_OWNER;"
-    )
-    .unwrap();
+    writeln!(out, "    let is_uninitialized = data_len == 0;").unwrap();
     writeln!(
         out,
         "    let maybe_program_id = v[\"program_id_hex\"].as_str()"
@@ -736,20 +754,31 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
     writeln!(out, "        .filter(|s| !s.is_empty())").unwrap();
     writeln!(out, "        .map(|s| parse_program_id_hex(s))").unwrap();
     writeln!(out, "        .transpose()?;").unwrap();
+    // "foreign" is gone: an account is not owned by one program, so a shard under
+    // another program's key says nothing about this one. Without a program id there
+    // is no shard to classify.
     writeln!(
         out,
-        "    let status = if is_uninitialized {{ \"uninitialized\" }}"
+        "    let status = if maybe_program_id.is_none() {{ \"unknown\" }}"
     )
     .unwrap();
-    writeln!(out, "        else if maybe_program_id.map_or(false, |pid| account.program_owner == pid) {{ \"owned\" }}").unwrap();
-    writeln!(out, "        else {{ \"foreign\" }};").unwrap();
+    writeln!(
+        out,
+        "        else if is_uninitialized {{ \"uninitialized\" }}"
+    )
+    .unwrap();
+    writeln!(out, "        else {{ \"owned\" }};").unwrap();
     writeln!(out, "    Ok(json!({{").unwrap();
     writeln!(
         out,
         "        \"success\": true, \"data_len\": data_len, \"data_preview\": data_preview,"
     )
     .unwrap();
-    writeln!(out, "        \"has_signing_key\": has_key, \"program_owner\": program_owner_hex, \"status\": status").unwrap();
+    writeln!(
+        out,
+        "        \"has_signing_key\": has_key, \"shards\": shards, \"status\": status"
+    )
+    .unwrap();
     writeln!(out, "    }}).to_string())").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
@@ -916,18 +945,13 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
     )
     .unwrap();
     writeln!(out, "                    Ok(account) => {{").unwrap();
-    writeln!(
-        out,
-        "                        let is_uninit = account.program_owner == nssa_core::program::DEFAULT_PROGRAM_OWNER;"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "                        if is_uninit {{ \"uninitialized\" }}"
-    )
-    .unwrap();
-    writeln!(out, "                        else if maybe_program_id.map_or(false, |pid| account.program_owner == pid) {{ \"owned\" }}").unwrap();
-    writeln!(out, "                        else {{ \"foreign\" }}").unwrap();
+    // Same shard reasoning as the inspect FFI above: status is relative to the
+    // program the caller named, because an account holds one shard per program.
+    writeln!(out, "                        match maybe_program_id {{").unwrap();
+    writeln!(out, "                            None => \"unknown\",").unwrap();
+    writeln!(out, "                            Some(pid) if account.data.shard(pid).is_empty() => \"uninitialized\",").unwrap();
+    writeln!(out, "                            Some(_) => \"owned\",").unwrap();
+    writeln!(out, "                        }}").unwrap();
     writeln!(out, "                    }}").unwrap();
     writeln!(out, "                    Err(_) => \"unknown\",").unwrap();
     writeln!(out, "                }}").unwrap();
@@ -1072,7 +1096,10 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
     writeln!(out, "    let account = rt.block_on(async {{").unwrap();
     writeln!(out, "        wallet.get_account_public(account_id).await.map_err(|e| format!(\"get_account_public: {{}}\", e))").unwrap();
     writeln!(out, "    }})?;").unwrap();
-    writeln!(out, "    if account.data.is_empty() {{").unwrap();
+    // One shard per program: decode the shard of the program the caller named.
+    writeln!(out, "    let program_id = parse_program_id_hex(v[\"program_id_hex\"].as_str().ok_or(\"missing program_id_hex\")?)?;").unwrap();
+    writeln!(out, "    let shard = account.data.shard(program_id);").unwrap();
+    writeln!(out, "    if shard.is_empty() {{").unwrap();
     writeln!(out, "        return Ok(json!({{\"success\": true, \"status\": \"uninitialized\", \"type\": null, \"fields\": null}}).to_string());").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(
@@ -1085,9 +1112,13 @@ pub fn generate_ffi(idl: &SpelIdl, idl_json: &str) -> Result<String, String> {
         "        .map_err(|e| format!(\"IDL parse: {{}}\", e))?;"
     )
     .unwrap();
-    writeln!(out, "    match spel_framework_core::decode::decode_account_data_try_all(&account.data, &idl) {{").unwrap();
+    writeln!(
+        out,
+        "    match spel_framework_core::decode::decode_account_data_try_all(shard, &idl) {{"
+    )
+    .unwrap();
     writeln!(out, "        Some((type_name, fields)) => Ok(json!({{\"success\": true, \"type\": type_name, \"fields\": fields}}).to_string()),").unwrap();
-    writeln!(out, "        None => Ok(json!({{\"success\": true, \"type\": null, \"fields\": null, \"raw_hex\": hex::encode(&account.data)}}).to_string()),").unwrap();
+    writeln!(out, "        None => Ok(json!({{\"success\": true, \"type\": null, \"fields\": null, \"raw_hex\": hex::encode(shard)}}).to_string()),").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out, "}}").unwrap();
 
@@ -1554,7 +1585,8 @@ pub fn generate_account_fetch_functions(idl: &SpelIdl, prefix: &str, out: &mut S
             writeln!(out, "        wallet.get_account_public(pda).await.map_err(|e| format!(\"get_account_public: {{e}}\"))").unwrap();
             writeln!(out, "    }})?;").unwrap();
             writeln!(out, "    let idl: spel_framework_core::idl::SpelIdl = serde_json::from_str(PROGRAM_IDL_JSON).map_err(|e| format!(\"IDL: {{e}}\"))?;").unwrap();
-            writeln!(out, "    let state = match spel_framework_core::decode::decode_account_data_try_all(&account.data, &idl) {{").unwrap();
+            // `program_id` is already parsed above in this generated function.
+            writeln!(out, "    let state = match spel_framework_core::decode::decode_account_data_try_all(account.data.shard(program_id), &idl) {{").unwrap();
             writeln!(out, "        Some((_type_name, fields)) => fields,").unwrap();
             writeln!(
                 out,

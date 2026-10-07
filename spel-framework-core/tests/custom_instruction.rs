@@ -3,7 +3,6 @@
 //! This tests the contract: programs can bring their own Instruction enum
 //! and the framework will use it instead of generating one.
 
-use nssa_core::program::AccountStateDiff;
 use spel_framework_core::error::SpelError;
 use spel_framework_core::types::SpelOutput;
 
@@ -46,7 +45,10 @@ mod simulated_external_instruction {
         if value == 0 {
             return Err(SpelError::custom(1, "value cannot be zero"));
         }
-        Ok(SpelOutput::execute(Vec::<AccountStateDiff>::new(), vec![]))
+        // An empty plan: no shard touched, no call made. Up to v0.2.5 this took
+        // an explicit empty diff vector; under v0.3.0 touching nothing is simply
+        // planning nothing.
+        Ok(SpelOutput::empty())
     }
 
     #[test]

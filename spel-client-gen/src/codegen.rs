@@ -232,7 +232,11 @@ pub fn generate_client(idl: &SpelIdl) -> Result<String, String> {
         .unwrap();
         writeln!(out, "            signing_keys.push(key);").unwrap();
         writeln!(out, "        }}").unwrap();
-        writeln!(out, "        let message = Message::try_new(self.program_id, account_ids, nonces, instruction)").unwrap();
+        writeln!(out, "        let shard_selectors: Vec<nssa_core::account::ProgramShardSelector> = account_ids").unwrap();
+        writeln!(out, "            .iter()").unwrap();
+        writeln!(out, "            .map(|id| nssa_core::account::ProgramShardSelector {{ account_id: *id, program_account_id: self.program_id }})").unwrap();
+        writeln!(out, "            .collect();").unwrap();
+        writeln!(out, "        let message = Message::try_new(self.program_id, shard_selectors, nonces, instruction)").unwrap();
         writeln!(
             out,
             "            .map_err(|e| format!(\"message: {{:?}}\", e))?;"

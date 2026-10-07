@@ -1,21 +1,23 @@
-//! Test that #[account(signer)] generates runtime validation checks.
+//! Test that #[account(signer)] generates runtime validation checks, and that
+//! `#[account(init)]`'s guarantee survives its move to the apply phase.
 //!
 //! This is an expansion test — we cannot run the macro in a unit test directly,
 //! so we test the validation functions that would be generated.
 
-use nssa_core::account::{Account, AccountId, AccountWithMetadata};
+use nssa_core::account::AccountId;
+use nssa_core::program::{write_once, AccountMeta};
 use spel_framework_core::error::SpelError;
 
 /// Simulate the validation function that the macro would generate for:
 /// ```
-/// #[instruction]
+/// #[plan]
 /// pub fn transfer(
-///     #[account(mut)] from: AccountWithMetadata,
-///     #[account(signer)] authority: AccountWithMetadata,
-///     #[account(mut)] to: AccountWithMetadata,
+///     #[account(mut)] from: AccountMeta,
+///     #[account(signer)] authority: AccountMeta,
+///     #[account(mut)] to: AccountMeta,
 /// ) -> SpelResult { ... }
 /// ```
-fn __validate_transfer(accounts: &[AccountWithMetadata]) -> Result<(), SpelError> {
+fn __validate_transfer(accounts: &[AccountMeta]) -> Result<(), SpelError> {
     // Account index 1 has #[account(signer)]
     if !accounts[1].is_authorized {
         return Err(SpelError::Unauthorized {
@@ -27,17 +29,18 @@ fn __validate_transfer(accounts: &[AccountWithMetadata]) -> Result<(), SpelError
 
 /// Simulate validation for an init + signer instruction:
 /// ```
-/// #[instruction]
+/// #[plan]
 /// pub fn create_state(
-///     #[account(init)] state: AccountWithMetadata,
-///     #[account(signer)] creator: AccountWithMetadata,
+///     #[account(init)] state: AccountMeta,
+///     #[account(signer)] creator: AccountMeta,
 /// ) -> SpelResult { ... }
 /// ```
-fn __validate_create_state(accounts: &[AccountWithMetadata]) -> Result<(), SpelError> {
-    // Account index 0 has #[account(init)]
-    if accounts[0].account != Account::default() {
-        return Err(SpelError::AccountAlreadyInitialized { account_index: 0 });
-    }
+///
+/// Only the signer check lives here now. `#[account(init)]` asked
+/// `account != Account::default()`, which needs account data a plan does not
+/// receive; its guarantee moved to the apply half, simulated by
+/// [`apply_create_state`] below.
+fn __validate_create_state(accounts: &[AccountMeta]) -> Result<(), SpelError> {
     // Account index 1 has #[account(signer)]
     if !accounts[1].is_authorized {
         return Err(SpelError::Unauthorized {
@@ -47,22 +50,19 @@ fn __validate_create_state(accounts: &[AccountWithMetadata]) -> Result<(), SpelE
     Ok(())
 }
 
-fn make_account(id: [u8; 32], authorized: bool) -> AccountWithMetadata {
-    AccountWithMetadata {
-        account_id: AccountId::new(id),
-        account: Account::default(),
-        is_authorized: authorized,
-    }
+/// Simulate the apply half that now carries `#[account(init)]`'s guarantee.
+///
+/// `write_once` is the framework's canonical form: it accepts a write into an
+/// empty shard, accepts an idempotent rewrite of identical bytes, and panics on
+/// anything else. A panic fails the whole transaction, which is what the
+/// `AccountAlreadyInitialized` error used to do from the plan phase.
+fn apply_create_state(pre_data: &[u8], new_data: Vec<u8>) -> Vec<u8> {
+    write_once(pre_data, new_data)
 }
 
-fn make_account_with_data(id: [u8; 32], data: Vec<u8>, authorized: bool) -> AccountWithMetadata {
-    let mut account = Account::default();
-    account.data = data.try_into().unwrap();
-    AccountWithMetadata {
-        account_id: AccountId::new(id),
-        account,
-        is_authorized: authorized,
-    }
+/// A plan-phase handle. No account data — a plan never sees any.
+fn make_account(id: [u8; 32], authorized: bool) -> AccountMeta {
+    AccountMeta::new(AccountId::new(id), authorized, AccountId::new([0u8; 32]))
 }
 
 #[test]
@@ -92,38 +92,45 @@ fn test_signer_unauthorized_fails() {
     }
 }
 
+/// The plan half passes regardless of shard contents: it cannot see them.
 #[test]
-fn test_init_uninitialized_passes() {
+fn test_plan_half_accepts_any_shard_state() {
     let accounts = vec![
-        make_account([1u8; 32], false), // state (init, default = uninitialized)
+        make_account([1u8; 32], false), // state (init — unchecked in the plan phase)
         make_account([2u8; 32], true),  // creator (signer, authorized)
     ];
     assert!(__validate_create_state(&accounts).is_ok());
 }
 
+/// An empty shard is the "fresh" case `#[account(init)]` used to assert.
 #[test]
-fn test_init_already_initialized_fails() {
-    let accounts = vec![
-        make_account_with_data([1u8; 32], vec![42], false), // state already has data
-        make_account([2u8; 32], true),
-    ];
-    let err = __validate_create_state(&accounts).unwrap_err();
-    match err {
-        SpelError::AccountAlreadyInitialized { account_index } => {
-            assert_eq!(account_index, 0);
-        },
-        _ => panic!("Expected AccountAlreadyInitialized, got {err:?}"),
-    }
+fn test_init_empty_shard_accepts_the_write() {
+    assert_eq!(apply_create_state(&[], vec![42]), vec![42]);
 }
 
+/// Rewriting the same bytes is idempotent, so a replayed effect is not a failure.
 #[test]
-fn test_init_and_signer_both_checked() {
-    // Both init account initialized AND signer not authorized
+fn test_init_identical_rewrite_is_allowed() {
+    assert_eq!(apply_create_state(&[42], vec![42]), vec![42]);
+}
+
+/// The guarantee that actually moved: a non-empty shard cannot be overwritten with
+/// different data. This was `AccountAlreadyInitialized` from the plan phase; it is
+/// now a panic from the apply phase, which fails the transaction just the same.
+#[test]
+#[should_panic(expected = "shard already holds different data")]
+fn test_init_already_initialized_panics_in_apply() {
+    let _ = apply_create_state(&[42], vec![7]);
+}
+
+/// init and signer are now enforced in *different phases*, so one cannot mask the
+/// other: the signer check fails in the plan half before any apply runs.
+#[test]
+fn test_init_and_signer_are_checked_in_different_phases() {
     let accounts = vec![
-        make_account_with_data([1u8; 32], vec![42], false), // already initialized
-        make_account([2u8; 32], false),                     // not authorized
+        make_account([1u8; 32], false),
+        make_account([2u8; 32], false), // not authorized
     ];
-    // Init check runs first, so we get AccountAlreadyInitialized
     let err = __validate_create_state(&accounts).unwrap_err();
-    assert!(matches!(err, SpelError::AccountAlreadyInitialized { .. }));
+    assert!(matches!(err, SpelError::Unauthorized { .. }));
 }

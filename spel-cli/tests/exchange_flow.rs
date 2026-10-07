@@ -20,7 +20,10 @@ fn signed_blob() -> (TxBlob, PrivateKey) {
     let account_id = AccountId::from(&pubkey);
     let message = Message::new_preserialized(
         AccountId::new([0; 32]),
-        vec![account_id],
+        vec![nssa_core::account::ProgramShardSelector {
+            account_id,
+            program_account_id: AccountId::new([0; 32]),
+        }],
         vec![1_u128.into()],
         vec![1, 2, 3, 4],
         None,
@@ -85,7 +88,10 @@ fn submit_rejects_tampered_message() {
     let account_id = AccountId::from(&pubkey);
     let tampered = Message::new_preserialized(
         AccountId::new([0; 32]),
-        vec![account_id],
+        vec![nssa_core::account::ProgramShardSelector {
+            account_id,
+            program_account_id: AccountId::new([0; 32]),
+        }],
         vec![1_u128.into()],
         vec![9, 9, 9, 9],
         None,
@@ -115,7 +121,10 @@ fn sign_rejects_tampered_message() {
     let account_id = AccountId::from(&pubkey);
     let tampered = Message::new_preserialized(
         AccountId::new([0; 32]),
-        vec![account_id],
+        vec![nssa_core::account::ProgramShardSelector {
+            account_id,
+            program_account_id: AccountId::new([0; 32]),
+        }],
         vec![1_u128.into()],
         vec![9, 9, 9, 9],
         None,
