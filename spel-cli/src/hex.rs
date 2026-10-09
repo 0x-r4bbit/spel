@@ -30,6 +30,20 @@ pub fn parse_account_id(input: &str) -> Result<([u8; 32], bool), String> {
     Ok((bytes, is_private))
 }
 
+/// Split an account argument into the account and the program whose shard it
+/// selects: `<account>@<program>`. Without `@` the owner is `None`, and the
+/// caller binds the account to the called program's own shard.
+pub fn split_shard_owner(input: &str) -> Result<(&str, Option<[u8; 32]>), String> {
+    match input.split_once('@') {
+        None => Ok((input, None)),
+        Some((account, program)) => {
+            let owner =
+                decode_bytes_32(program).map_err(|e| format!("shard owner '{program}': {e}"))?;
+            Ok((account, Some(owner)))
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +90,17 @@ mod tests {
         let (bytes, is_priv) = parse_account_id(&input).unwrap();
         assert_eq!(bytes, [0xcd; 32]);
         assert!(is_priv);
+    }
+
+    #[test]
+    fn test_split_shard_owner() {
+        let account = test_hex();
+        let program = format!("0x{}", "cd".repeat(32));
+        assert_eq!(split_shard_owner(&account).unwrap(), (account.as_str(), None));
+        let bound = format!("{account}@{program}");
+        let (acc, owner) = split_shard_owner(&bound).unwrap();
+        assert_eq!(acc, account);
+        assert_eq!(owner, Some([0xcd; 32]));
+        assert!(split_shard_owner(&format!("{account}@nope")).is_err());
     }
 }

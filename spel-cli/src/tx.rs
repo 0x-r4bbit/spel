@@ -2,7 +2,7 @@
 
 use crate::blob::{TxBlob, WitnessEntry};
 use crate::cli::{snake_to_kebab, to_pascal_case};
-use crate::hex::{decode_bytes_32, hex_encode, parse_account_id};
+use crate::hex::{decode_bytes_32, hex_encode, parse_account_id, split_shard_owner};
 use crate::parse::{parse_string_vec, parse_value, ParsedValue};
 use crate::pda::compute_pda_from_seeds;
 use crate::serialize::serialize_to_borsh;
@@ -155,6 +155,24 @@ pub async fn execute_instruction(
     let mut parsed_accounts: Vec<(&str, Vec<u8>, bool)> = Vec::new();
     // rest accounts are variadic: each expands to 0 or more AccountIds
     let mut rest_accounts: Vec<(&str, Vec<(Vec<u8>, bool)>)> = Vec::new();
+    // Accounts passed as `<account>@<program>` select that program's shard
+    // instead of the called program's (see the shard binding below).
+    let mut shard_owners: HashMap<AccountId, AccountId> = HashMap::new();
+    let mut parse_account = |key: &str, raw: &str| -> Option<([u8; 32], bool)> {
+        let parsed = split_shard_owner(raw).and_then(|(account, owner)| {
+            let (bytes, is_priv) = parse_account_id(account)?;
+            if let Some(owner) = owner {
+                let previous = shard_owners.insert(AccountId::new(bytes), AccountId::new(owner));
+                if previous.is_some_and(|p| p != AccountId::new(owner)) {
+                    return Err(format!("{account} is bound to two different shard owners"));
+                }
+            }
+            Ok((bytes, is_priv))
+        });
+        parsed
+            .map_err(|e| eprintln!("❌ --{}: {}", key, e))
+            .ok()
+    };
     for acc in &ix.accounts {
         if acc.pda.is_some() {
             continue;
@@ -168,10 +186,9 @@ pub async fn execute_instruction(
                 raw.split(',')
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
-                    .filter_map(|s| match parse_account_id(s) {
-                        Ok((bytes, is_priv)) => Some((bytes.to_vec(), is_priv)),
-                        Err(e) => {
-                            eprintln!("❌ --{}: {}", key, e);
+                    .filter_map(|s| match parse_account(&key, s) {
+                        Some((bytes, is_priv)) => Some((bytes.to_vec(), is_priv)),
+                        None => {
                             has_errors = true;
                             None
                         },
@@ -183,12 +200,11 @@ pub async fn execute_instruction(
             rest_accounts.push((&acc.name, entries));
         } else {
             let raw = last_value(&args, &key).unwrap();
-            match parse_account_id(raw) {
-                Ok((bytes, is_priv)) => parsed_accounts.push((&acc.name, bytes.to_vec(), is_priv)),
-                Err(e) => {
-                    eprintln!("❌ --{}: {}", key, e);
-                    has_errors = true;
+            match parse_account(&key, raw) {
+                Some((bytes, is_priv)) => {
+                    parsed_accounts.push((&acc.name, bytes.to_vec(), is_priv))
                 },
+                None => has_errors = true,
             }
         }
     }
@@ -385,7 +401,17 @@ pub async fn execute_instruction(
                 .iter()
                 .find(|(n, _, _)| *n == acc.name)
                 .unwrap();
-            say!("  📦 {} → 0x{}", acc.name, hex_encode(&account_bytes.1));
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&account_bytes.1);
+            match shard_owners.get(&AccountId::new(arr)) {
+                Some(owner) => say!(
+                    "  📦 {} → 0x{} (shard of {})",
+                    acc.name,
+                    hex_encode(&account_bytes.1),
+                    owner
+                ),
+                None => say!("  📦 {} → 0x{}", acc.name, hex_encode(&account_bytes.1)),
+            }
         }
     }
     say!("");
@@ -517,11 +543,16 @@ pub async fn execute_instruction(
             }
         }
 
-        // Same shard binding as the public path above: each identity selects the
-        // called program's shard.
+        // Same shard binding as the public path below.
         let pp_mentions: Vec<AccountMention> = pp_accounts
             .into_iter()
-            .map(|identity| identity.select_program_shard(program_account_id))
+            .map(|identity| {
+                let owner = shard_owners
+                    .get(&identity.account_id())
+                    .copied()
+                    .unwrap_or(program_account_id);
+                identity.select_program_shard(owner)
+            })
             .collect();
 
         let (response, _shared_secrets) = wallet_core
@@ -644,18 +675,18 @@ pub async fn execute_instruction(
         // (account, owning program) pair, and `validate_plan` will not let the
         // program emit an effect on anything outside this set.
         //
-        // Every account is bound to the called program's own shard. That is right
-        // for a program acting on its own state, which is what `spel <program>
-        // <instruction>` invokes, but it cannot express an instruction that reaches
-        // another program's shard directly — the IDL records no per-account shard
-        // owner yet, so there is nothing to derive one from. Such an instruction
-        // has to route through a chained call, where the callee names its own
-        // shards.
+        // An account is bound to the called program's own shard unless it was
+        // passed as `<account>@<program>`. The IDL records no per-account shard
+        // owner, so an instruction that reads another program's shard directly
+        // (a clock, a token holding) needs the caller to name it.
         let shard_selectors: Vec<ProgramShardSelector> = account_ids
             .iter()
             .map(|id| ProgramShardSelector {
                 account_id: *id,
-                program_account_id,
+                program_account_id: shard_owners
+                    .get(id)
+                    .copied()
+                    .unwrap_or(program_account_id),
             })
             .collect();
 

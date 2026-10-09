@@ -577,7 +577,7 @@ pub async fn run() {
                         eprintln!("      spel --idl <FILE> -- <command> --arg1 value1");
                         eprintln!();
                     }
-                    let cli_args = parse_instruction_args(&remaining_args[2..], ix);
+                    let cli_args = parse_instruction_args(&remaining_args[2..], ix, &idl.types);
                     execute_instruction(
                         &idl,
                         ix,

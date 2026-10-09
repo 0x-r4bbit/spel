@@ -1,6 +1,6 @@
 //! CLI helpers: help text, argument parsing, string utilities.
 
-use spel_framework_core::idl::{IdlInstruction, IdlType, SpelIdl};
+use spel_framework_core::idl::{IdlInstruction, IdlType, IdlTypeDef, SpelIdl};
 use std::collections::HashMap;
 
 /// Print help for all commands derived from the IDL.
@@ -62,6 +62,11 @@ pub fn print_help(idl: &SpelIdl, binary_name: &str) {
     println!("  [u32; 8] / program_id Comma-separated u32s: \"0,0,0,0,0,0,0,0\"");
     println!("  Vec<[u8; 32]>         Comma-separated hex strings: \"aabb...00,ccdd...00\"");
     println!("  Vec<String>           Repeat the flag, one element per occurrence: --foo a --foo b --foo c");
+    println!("  a struct type         JSON object of every field: '{{\"field\": value, ...}}'");
+    println!("  an enum type          Variant name, or '{{\"Variant\": {{\"field\": value}}}}'");
+    println!("                        `<command> --help` lists each type's fields.");
+    println!("  an account            <ID> selects the called program's shard of it;");
+    println!("                        <ID>@<PROGRAM> selects PROGRAM's shard (e.g. a clock or token holding)");
     println!();
     println!("CONFIG:");
     println!("  Create a spel.toml in your project root to avoid passing --idl and --program:");
@@ -73,7 +78,7 @@ pub fn print_help(idl: &SpelIdl, binary_name: &str) {
 }
 
 /// Print detailed help for a single instruction.
-pub fn print_instruction_help(ix: &IdlInstruction) {
+pub fn print_instruction_help(ix: &IdlInstruction, types: &[IdlTypeDef]) {
     println!(
         "📋 {} — {} account(s), {} arg(s)",
         ix.name,
@@ -125,6 +130,52 @@ pub fn print_instruction_help(ix: &IdlInstruction) {
             );
         }
     }
+    print_defined_arg_shapes(ix, types);
+}
+
+/// Spell out the JSON shape of every struct/enum argument this instruction takes.
+///
+/// Without this a `ConfigFacts` argument is just a type name in the help, and the
+/// caller has to read the program's source to learn its fields.
+fn print_defined_arg_shapes(ix: &IdlInstruction, types: &[IdlTypeDef]) {
+    let mut printed: Vec<&str> = Vec::new();
+    for arg in &ix.args {
+        let IdlType::Defined { defined } = &arg.type_ else {
+            continue;
+        };
+        if printed.contains(&defined.as_str()) {
+            continue;
+        }
+        let Some(def) = types.iter().find(|t| &t.name == defined) else {
+            continue;
+        };
+        printed.push(defined.as_str());
+        println!();
+        if def.kind == "struct" {
+            println!("{} — pass a JSON object of all its fields:", def.name);
+            for field in &def.fields {
+                println!(
+                    "  {:<26} {}",
+                    field.name,
+                    idl_type_display(&field.type_)
+                );
+            }
+        } else {
+            println!("{} — pass a variant name, or a one-key JSON object:", def.name);
+            for variant in &def.variants {
+                if variant.fields.is_empty() {
+                    println!("  {}", variant.name);
+                } else {
+                    let fields: Vec<String> = variant
+                        .fields
+                        .iter()
+                        .map(|f| format!("{}: {}", f.name, idl_type_display(&f.type_)))
+                        .collect();
+                    println!("  {} {{ {} }}", variant.name, fields.join(", "));
+                }
+            }
+        }
+    }
 }
 
 /// Parse CLI args for an instruction into a key → list-of-values map.
@@ -142,6 +193,7 @@ pub fn print_instruction_help(ix: &IdlInstruction) {
 pub fn parse_instruction_args(
     args: &[String],
     ix: &IdlInstruction,
+    types: &[IdlTypeDef],
 ) -> HashMap<String, Vec<String>> {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     let mut i = 0;
@@ -173,7 +225,7 @@ pub fn parse_instruction_args(
     }
 
     if map.contains_key("help") || map.contains_key("h") {
-        print_instruction_help(ix);
+        print_instruction_help(ix, types);
         std::process::exit(0);
     }
     if let Err(msg) = reject_unknown_keys(&map, ix) {

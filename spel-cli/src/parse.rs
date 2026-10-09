@@ -24,6 +24,13 @@ pub enum ParsedValue {
         index: u32,
         fields: Vec<(String, IdlType, ParsedValue)>,
     },
+    /// A `kind: "struct"` IDL type: its fields in declaration order. Borsh writes
+    /// them back to back with no tag and no length, so this is a plain tuple on
+    /// the wire -- see `to_dynamic_value`.
+    Struct {
+        name: String,
+        fields: Vec<(String, IdlType, ParsedValue)>,
+    },
     Raw(String), // fallback
 }
 
@@ -77,6 +84,13 @@ impl std::fmt::Display for ParsedValue {
                     write!(f, "{} {{ {} }}", name, parts.join(", "))
                 }
             },
+            ParsedValue::Struct { name, fields } => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .map(|(n, _, v)| format!("{}: {}", n, v))
+                    .collect();
+                write!(f, "{} {{ {} }}", name, parts.join(", "))
+            },
             ParsedValue::Raw(s) => write!(f, "{}", s),
         }
     }
@@ -104,16 +118,26 @@ pub fn parse_value(raw: &str, ty: &IdlType, types: &[IdlTypeDef]) -> Result<Pars
 /// Parse a user-defined type by looking its definition up in the IDL.
 ///
 /// Accepted syntax:
-/// - a bare variant name for unit variants
-/// - a one-key JSON object for payload variants
+/// - a bare variant name for a unit enum variant
+/// - a one-key JSON object for an enum variant with a payload
+/// - a JSON object of all the fields for a struct
+///
+/// Structs became unavoidable with LEZ v0.3.0's declare-and-pin: a plan can no
+/// longer read a shard, so instructions carry the values it used to look up as
+/// struct arguments (the AMM's `ConfigFacts` and `PoolIdentity`, the Token
+/// Program's `TokenDescriptor`), and a CLI that cannot encode them cannot submit
+/// those instructions at all.
 fn parse_defined(raw: &str, name: &str, types: &[IdlTypeDef]) -> Result<ParsedValue, String> {
     let def = types
         .iter()
         .find(|t| t.name == name)
         .ok_or_else(|| format!("type '{name}' not found in the IDL's type section"))?;
+    if def.kind == "struct" {
+        return parse_struct(raw, def, types);
+    }
     if def.kind != "enum" {
         return Err(format!(
-            "'{name}' is {}; only enum arguments are supported for now",
+            "'{name}' is {}; only struct and enum arguments are supported",
             def.kind,
         ));
     }
@@ -152,15 +176,73 @@ fn parse_defined(raw: &str, name: &str, types: &[IdlTypeDef]) -> Result<ParsedVa
         .find(|(_, v)| &v.name == variant_name)
         .ok_or_else(|| format!("'{variant_name}' is not a variant of '{name}'"))?;
 
-    // Fields in the IDL's declaration order, values pulled from the JSON by name.
-    let mut fields = Vec::new();
-    for field in &variant.fields {
-        let field_json = payload.get(&field.name).ok_or_else(|| {
-            format!(
-                "missing field '{}' for variant '{variant_name}'",
-                field.name
-            )
-        })?;
+    let payload = payload.as_object().ok_or_else(|| {
+        format!("payload for variant '{variant_name}' must be a JSON object of its fields")
+    })?;
+    let fields = parse_fields(&variant.fields, payload, variant_name, types)?;
+
+    Ok(ParsedValue::EnumVariant {
+        name: variant.name.clone(),
+        index: index as u32,
+        fields,
+    })
+}
+
+/// Parse a struct argument from a JSON object of its fields.
+///
+/// Unlike an enum there is no variant to name, so the JSON is the field map
+/// itself: `--facts '{"token_program_id": "<id>", "swap_fee_bps": 30, ...}'`.
+/// Every field must be present -- a struct has no default on the wire, and a
+/// missing one would silently shift every byte after it.
+fn parse_struct(
+    raw: &str,
+    def: &IdlTypeDef,
+    types: &[IdlTypeDef],
+) -> Result<ParsedValue, String> {
+    let json: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
+        let names: Vec<&str> = def.fields.iter().map(|f| f.name.as_str()).collect();
+        format!(
+            "expected a JSON object for struct '{}' with fields [{}]: {e}",
+            def.name,
+            names.join(", ")
+        )
+    })?;
+    let obj = json
+        .as_object()
+        .ok_or_else(|| format!("expected a JSON object for struct '{}'", def.name))?;
+
+    // Reject unknown keys: silently ignoring one is how a typo'd field name
+    // becomes an instruction that encodes a stale value and reverts on a guard.
+    for key in obj.keys() {
+        if !def.fields.iter().any(|f| &f.name == key) {
+            let names: Vec<&str> = def.fields.iter().map(|f| f.name.as_str()).collect();
+            return Err(format!(
+                "'{key}' is not a field of '{}'; expected [{}]",
+                def.name,
+                names.join(", ")
+            ));
+        }
+    }
+
+    Ok(ParsedValue::Struct {
+        name: def.name.clone(),
+        fields: parse_fields(&def.fields, obj, &def.name, types)?,
+    })
+}
+
+/// Pull `fields` out of a JSON object by name, in the IDL's declaration order --
+/// which is the Borsh order, so it is the order that matters, not the JSON's.
+fn parse_fields(
+    fields: &[spel_framework_core::idl::IdlField],
+    payload: &serde_json::Map<String, serde_json::Value>,
+    owner: &str,
+    types: &[IdlTypeDef],
+) -> Result<Vec<(String, IdlType, ParsedValue)>, String> {
+    let mut parsed = Vec::new();
+    for field in fields {
+        let field_json = payload
+            .get(&field.name)
+            .ok_or_else(|| format!("missing field '{}' for '{owner}'", field.name))?;
         // parse_value expects the CLI's raw-string form: strings drop their
         // JSON quotes (hex stays hex), everything else keeps its JSON text.
         let field_raw = match field_json {
@@ -169,14 +251,9 @@ fn parse_defined(raw: &str, name: &str, types: &[IdlTypeDef]) -> Result<ParsedVa
         };
         let value = parse_value(&field_raw, &field.type_, types)
             .map_err(|e| format!("field '{}': {e}", field.name))?;
-        fields.push((field.name.clone(), field.type_.clone(), value));
+        parsed.push((field.name.clone(), field.type_.clone(), value));
     }
-
-    Ok(ParsedValue::EnumVariant {
-        name: variant.name.clone(),
-        index: index as u32,
-        fields,
-    })
+    Ok(parsed)
 }
 
 fn parse_primitive(raw: &str, prim: &str) -> Result<ParsedValue, String> {

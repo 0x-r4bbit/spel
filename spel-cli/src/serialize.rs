@@ -132,6 +132,15 @@ fn to_dynamic_value(ty: &IdlType, val: &ParsedValue) -> Result<DynamicValue, Ser
             // Non-None, non-Some value with Option type -> wrap as Some
             Ok(DynamicValue::Some(Box::new(to_dynamic_value(option, val)?)))
         },
+        // A struct is its fields back to back: no variant tag, no length prefix,
+        // which is exactly what a serde tuple borsh-encodes to.
+        (IdlType::Defined { .. }, ParsedValue::Struct { fields, .. }) => {
+            let converted: Result<Vec<_>, _> = fields
+                .iter()
+                .map(|(_, fty, fval)| to_dynamic_value(fty, fval))
+                .collect();
+            Ok(DynamicValue::Tuple(converted?))
+        },
         (IdlType::Defined { .. }, ParsedValue::EnumVariant { index, fields, .. }) => {
             if fields.is_empty() {
                 Ok(DynamicValue::UnitVariant(*index))
@@ -275,7 +284,8 @@ pub fn serialize_to_borsh(
 mod tests {
     use super::*;
     use crate::parse::{parse_string_vec, parse_value};
-    use spel_framework_core::idl::IdlType;
+    use crate::hex::hex_encode;
+    use spel_framework_core::idl::{IdlField, IdlType, IdlTypeDef};
 
     /// Verify risc0's own serializer as the reference for [u8; 32] format.
     #[test]
@@ -421,6 +431,135 @@ mod tests {
         let bytes = serialize_to_borsh(0, &[(ty, &parsed)]).expect("encodes");
         assert_eq!(bytes[0], 0, "variant tag leads the encoding");
         bytes[1..].to_vec()
+    }
+
+    /// `encode_one` with a types section, for `Defined` arguments.
+    fn encode_defined(ty: &IdlType, raw: &str, types: &[IdlTypeDef]) -> Vec<u8> {
+        let parsed = parse_value(raw, ty, types).expect("value parses");
+        let bytes = serialize_to_borsh(0, &[(ty, &parsed)]).expect("encodes");
+        assert_eq!(bytes[0], 0, "variant tag leads the encoding");
+        bytes[1..].to_vec()
+    }
+
+    /// The AMM's `ConfigFacts`, the struct argument that made struct support
+    /// necessary: two account ids and two u128s.
+    fn config_facts_idl() -> Vec<IdlTypeDef> {
+        vec![IdlTypeDef {
+            name: "ConfigFacts".to_string(),
+            kind: "struct".to_string(),
+            fields: vec![
+                IdlField {
+                    name: "token_program_id".to_string(),
+                    type_: prim("account_id"),
+                },
+                IdlField {
+                    name: "swap_fee_bps".to_string(),
+                    type_: prim("u128"),
+                },
+                IdlField {
+                    name: "protocol_fee_bps".to_string(),
+                    type_: prim("u128"),
+                },
+            ],
+            variants: vec![],
+        }]
+    }
+
+    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+    struct ConfigFactsFixture {
+        token_program_id: [u8; 32],
+        swap_fee_bps: u128,
+        protocol_fee_bps: u128,
+    }
+
+    /// A struct argument must encode byte-for-byte like Borsh's own derive: its
+    /// fields back to back, no variant tag, no length prefix.
+    #[test]
+    fn struct_arg_matches_borsh_derive() {
+        let ty = IdlType::Defined {
+            defined: "ConfigFacts".to_string(),
+        };
+        let token_program = [0x11u8; 32];
+        let bytes = encode_defined(
+            &ty,
+            &format!(
+                r#"{{"token_program_id": "{}", "swap_fee_bps": 30, "protocol_fee_bps": 5}}"#,
+                hex_encode(&token_program)
+            ),
+            &config_facts_idl(),
+        );
+
+        let reference = borsh::to_vec(&ConfigFactsFixture {
+            token_program_id: token_program,
+            swap_fee_bps: 30,
+            protocol_fee_bps: 5,
+        })
+        .expect("the fixture serializes");
+        assert_eq!(bytes, reference);
+        assert_eq!(bytes.len(), 32 + 16 + 16, "no tag, no length prefix");
+    }
+
+    /// JSON key order is irrelevant: Borsh order is the IDL's declaration order.
+    #[test]
+    fn struct_arg_ignores_json_key_order() {
+        let ty = IdlType::Defined {
+            defined: "ConfigFacts".to_string(),
+        };
+        let types = config_facts_idl();
+        let id = hex_encode(&[0x22u8; 32]);
+        let declared = encode_defined(
+            &ty,
+            &format!(
+                r#"{{"token_program_id": "{id}", "swap_fee_bps": 1, "protocol_fee_bps": 2}}"#
+            ),
+            &types,
+        );
+        let shuffled = encode_defined(
+            &ty,
+            &format!(
+                r#"{{"protocol_fee_bps": 2, "token_program_id": "{id}", "swap_fee_bps": 1}}"#
+            ),
+            &types,
+        );
+        assert_eq!(declared, shuffled);
+    }
+
+    /// A missing field would shift every byte after it, so it must be refused
+    /// rather than defaulted.
+    #[test]
+    fn struct_arg_rejects_a_missing_field() {
+        let ty = IdlType::Defined {
+            defined: "ConfigFacts".to_string(),
+        };
+        let error = parse_value(
+            r#"{"token_program_id": "3333333333333333333333333333333333333333333333333333333333333333", "swap_fee_bps": 30}"#,
+            &ty,
+            &config_facts_idl(),
+        )
+        .expect_err("a partial struct must not parse");
+        assert!(
+            error.contains("protocol_fee_bps"),
+            "the error must name the missing field, got: {error}"
+        );
+    }
+
+    /// A typo'd field name must stop the run, not encode a struct that silently
+    /// omits the value the caller meant to supply.
+    #[test]
+    fn struct_arg_rejects_an_unknown_field() {
+        let ty = IdlType::Defined {
+            defined: "ConfigFacts".to_string(),
+        };
+        let error = parse_value(
+            r#"{"token_program_id": "3333333333333333333333333333333333333333333333333333333333333333", "swap_fee_bps": 30, "protocol_fee_bp": 5}"#,
+            &ty,
+            &config_facts_idl(),
+        )
+        .expect_err("an unknown field must not parse");
+        assert!(
+            error.contains("protocol_fee_bp"),
+            "the error must name the unknown field, got: {error}"
+        );
     }
 
     #[test]
