@@ -2,4 +2,5 @@
 tests/e2e/fixture_program/target/
 tests/e2e/two_carrier_program/target/
 tests/e2e/overlapping_windows_program/target/
+tests/e2e/injected_account_program/target/
 test-spel-e2e/target/

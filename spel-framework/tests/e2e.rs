@@ -395,3 +395,69 @@ fn e2e_overlapping_windows_refuse_to_compile() {
         "the build failed without the window collision assert:\n{stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Gate account injection — injected params must build and land in the IDL
+// ---------------------------------------------------------------------------
+
+/// The embedded fixtures remap gate accounts onto declared params and never create one.
+#[test]
+fn e2e_injected_gate_accounts_build_and_appear_in_idl() {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/e2e/injected_account_program/Cargo.toml");
+    let output = Command::new("cargo")
+        .args(["run", "--manifest-path"])
+        .arg(&manifest)
+        .output()
+        .expect("Failed to run cargo run");
+
+    assert!(
+        output.status.success(),
+        "a program with injected gate accounts must build:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let idl: spel_framework::idl::SpelIdl =
+        serde_json::from_str(String::from_utf8(output.stdout).unwrap().trim())
+            .expect("IDL JSON should be valid");
+    let poke = idl
+        .instructions
+        .iter()
+        .find(|i| i.name == "poke")
+        .expect("poke should be in the IDL");
+
+    let names: Vec<&str> = poke.accounts.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(names, ["caller", "gate_config", "gate_record"]);
+    let args: Vec<&str> = poke.args.iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(
+        args,
+        ["value"],
+        "an injected account must not be an argument"
+    );
+
+    assert!(poke.accounts[0].signer);
+    assert!(poke.accounts[0].pda.is_none());
+
+    let config_seeds = &poke.accounts[1]
+        .pda
+        .as_ref()
+        .expect("gate_config is a pda")
+        .seeds;
+    assert!(matches!(
+        config_seeds.as_slice(),
+        [spel_framework::idl::IdlSeed::Const { value }] if value == "gate_config"
+    ));
+
+    let record_seeds = &poke.accounts[2]
+        .pda
+        .as_ref()
+        .expect("gate_record is a pda")
+        .seeds;
+    assert!(matches!(
+        record_seeds.as_slice(),
+        [
+            spel_framework::idl::IdlSeed::Const { value },
+            spel_framework::idl::IdlSeed::Account { path },
+        ] if value == "gate_record" && path == "caller"
+    ));
+}

@@ -609,7 +609,7 @@ extension_attr = "my_ext"
             ),
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
     }
@@ -635,7 +635,7 @@ extension_attr = "my_ext"
             "my-ext/src/lib.rs",
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
 
@@ -699,7 +699,7 @@ extension_attr = "my_ext"
             "renamed-checkout/src/lib.rs",
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         tmp.write(
@@ -772,7 +772,7 @@ extension_attr = "my_ext"
             "evil-ext/src/lib.rs",
             r#"
 #[instruction]
-pub fn smuggled(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn smuggled(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         tmp.write(
@@ -852,7 +852,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
 
@@ -880,7 +880,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -915,7 +915,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         tmp.write(
@@ -955,7 +955,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -986,7 +986,7 @@ from = "grace"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata, offset: usize) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta, offset: usize) -> SpelResult { todo!() }
 "#,
         );
         let graph = crate::dep_walk::resolve_dep_graph(&tmp.path().join("user"), true, &mut |_| {});
@@ -1016,7 +1016,7 @@ state_type = "my_ext::ExtConfig"
 "#;
         let lib_rs = r#"
 #[instruction]
-pub fn ext_action(offset: usize, account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(offset: usize, account: AccountMeta) -> SpelResult { todo!() }
 "#;
         let tmp = TempDir::new("bound-non-trailing");
         ext_fixture(&tmp, metadata, lib_rs);
@@ -1056,7 +1056,7 @@ state_type = "my_ext::ExtConfig"
 "#;
         let lib_rs = r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata, offset: usize) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta, offset: usize) -> SpelResult { todo!() }
 "#;
 
         // Embedded marker: the value is the marker's offset.
@@ -1111,7 +1111,7 @@ default = 0
 "#;
         let lib_rs = r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata, admin_offset: usize) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta, admin_offset: usize) -> SpelResult { todo!() }
 "#;
 
         // Peer marker embedded: the value is the peer's offset kwarg.
@@ -1151,7 +1151,7 @@ from = "peer_ext::offset"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata, admin_offset: usize) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta, admin_offset: usize) -> SpelResult { todo!() }
 "#,
         );
         let graph = crate::dep_walk::resolve_dep_graph(&tmp.path().join("user"), true, &mut |_| {});
@@ -1214,7 +1214,7 @@ extension_attr = "my_ext"
             "my-ext/src/lib.rs",
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         tmp.write(
@@ -1269,10 +1269,10 @@ state_type = "my_ext::ExtConfig"
 "#,
             r#"
 #[instruction]
-pub fn ext_init(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_init(account: AccountMeta) -> SpelResult { todo!() }
 
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -1304,10 +1304,10 @@ skip = ["ext_init"]
 "#,
             r#"
 #[instruction]
-pub fn ext_init(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_init(account: AccountMeta) -> SpelResult { todo!() }
 
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let graph = crate::dep_walk::resolve_dep_graph(&tmp.path().join("user"), true, &mut |_| {});
@@ -1345,7 +1345,7 @@ state_type = "my_ext::ExtConfig"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -1395,7 +1395,7 @@ wrapper = "my_gate"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -1432,7 +1432,7 @@ state_type = "my_ext::ExtConfig"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let mod_attrs: Vec<Attribute> = syn::parse_quote!(
@@ -1441,7 +1441,7 @@ pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
         );
         let consumer_fns: Vec<ItemFn> = vec![syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1483,7 +1483,7 @@ pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
         )];
         let consumer_fns: Vec<ItemFn> = vec![syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1518,7 +1518,7 @@ pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
         )];
         let consumer_fns: Vec<ItemFn> = vec![syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1577,7 +1577,7 @@ wrapper = "my_gate"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         let graph = crate::dep_walk::resolve_dep_graph(&tmp.path().join("user"), true, &mut |_| {});
@@ -1620,7 +1620,7 @@ wrapper = "{ident}_gate"
                 &format!(
                     r#"
 #[instruction]
-pub fn {ident}_action(account: AccountWithMetadata) -> SpelResult {{ todo!() }}
+pub fn {ident}_action(account: AccountMeta) -> SpelResult {{ todo!() }}
 "#
                 ),
             );
@@ -1675,7 +1675,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         // Same fixture, but the marker sits above #[lez_program], the order
@@ -1706,7 +1706,7 @@ extension_attr = "my_ext"
 "#,
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
 
@@ -1964,7 +1964,7 @@ extension_attr = "my_ext"
             "my-ext/src/lib.rs",
             r#"
 #[instruction]
-pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 "#,
         );
         tmp.write(
@@ -1988,7 +1988,7 @@ my-ext = { path = "../my-ext" }
 #[my_ext]
 mod user_program {
     #[instruction]
-    pub fn ext_action(account: AccountWithMetadata) -> SpelResult { todo!() }
+    pub fn ext_action(account: AccountMeta) -> SpelResult { todo!() }
 }
 "#,
         );

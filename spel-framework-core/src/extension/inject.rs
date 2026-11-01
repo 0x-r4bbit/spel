@@ -559,10 +559,10 @@ fn build_inject_param(acc: &InjectAccount, remap: &HashMap<String, String>) -> F
         })
         .collect();
     match (&seed_exprs[..], acc.signer) {
-        ([], true) => parse_quote! { #[account(signer)] #ident: AccountWithMetadata },
-        ([], false) => parse_quote! { #ident: AccountWithMetadata },
-        ([single], _) => parse_quote! { #[account(pda = #single)] #ident: AccountWithMetadata },
-        (multi, _) => parse_quote! { #[account(pda = [#(#multi),*])] #ident: AccountWithMetadata },
+        ([], true) => parse_quote! { #[account(signer)] #ident: AccountMeta },
+        ([], false) => parse_quote! { #ident: AccountMeta },
+        ([single], _) => parse_quote! { #[account(pda = #single)] #ident: AccountMeta },
+        (multi, _) => parse_quote! { #[account(pda = [#(#multi),*])] #ident: AccountMeta },
     }
 }
 
@@ -869,8 +869,8 @@ mod tests {
         let (mut specs, embeds) = embedded_fixture();
         let create: ItemFn = syn::parse_quote!(
             pub fn create(
-                #[account(init, pda = literal("prog_config"))] prog_config: AccountWithMetadata,
-                #[account(signer)] payer: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] prog_config: AccountMeta,
+                #[account(signer)] payer: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -880,8 +880,8 @@ mod tests {
         let mut gated: ItemFn = syn::parse_quote!(
             #[my_gate]
             pub fn update(
-                #[account(pda = literal("prog_config"))] renamed: AccountWithMetadata,
-                #[account(signer)] sender: AccountWithMetadata,
+                #[account(pda = literal("prog_config"))] renamed: AccountMeta,
+                #[account(signer)] sender: AccountMeta,
                 value: u64,
             ) -> SpelResult {
                 todo!()
@@ -923,7 +923,7 @@ mod tests {
         let (mut specs, embeds) = initializer_specs();
         let create: ItemFn = syn::parse_quote!(
             pub fn create(
-                #[account(init, pda = literal("prog_config"))] prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -941,7 +941,7 @@ mod tests {
         let create: ItemFn = syn::parse_quote!(
             #[gate_initialize]
             pub fn create(
-                #[account(init, pda = literal("prog_config"))] prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -955,7 +955,7 @@ mod tests {
         let create: ItemFn = syn::parse_quote!(
             #[gate_initialize]
             pub fn create(
-                #[account(init, pda = literal("prog_config"))] prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -978,7 +978,7 @@ mod tests {
         let (mut specs, embeds) = embedded_fixture();
         let create: ItemFn = syn::parse_quote!(
             pub fn create(
-                #[account(init, pda = literal("prog_config"))] prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1021,10 +1021,7 @@ mod tests {
         let (specs, embeds) = embedded_fixture();
         let mut func: ItemFn = syn::parse_quote!(
             #[my_gate(caller = my_signer)]
-            pub fn update(
-                #[account(signer)] my_signer: AccountWithMetadata,
-                value: u64,
-            ) -> SpelResult {
+            pub fn update(#[account(signer)] my_signer: AccountMeta, value: u64) -> SpelResult {
                 todo!()
             }
         );
@@ -1129,7 +1126,7 @@ mod tests {
         let (specs, embeds, wraps) = embedded_wrap_fixture();
         let mut func: ItemFn = syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1152,8 +1149,8 @@ mod tests {
         let (specs, embeds, wraps) = embedded_wrap_fixture();
         let mut func: ItemFn = syn::parse_quote!(
             pub fn create_item(
-                #[account(pda = literal("prog_config"))] prog_config: AccountWithMetadata,
-                #[account(init, pda = literal("item"))] mut item: AccountWithMetadata,
+                #[account(pda = literal("prog_config"))] prog_config: AccountMeta,
+                #[account(init, pda = literal("item"))] mut item: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1185,7 +1182,7 @@ mod tests {
         let mut func: ItemFn = syn::parse_quote!(
             #[my_gate]
             pub fn update(
-                #[account(pda = literal("prog_config"))] prog_config: AccountWithMetadata,
+                #[account(pda = literal("prog_config"))] prog_config: AccountMeta,
                 value: u64,
             ) -> SpelResult {
                 todo!()
@@ -1219,7 +1216,7 @@ mod tests {
         specs[0].accounts[0].embedded = false;
         let mut func: ItemFn = syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1248,8 +1245,8 @@ mod tests {
         }];
         let mut func: ItemFn = syn::parse_quote!(
             pub fn ext_transfer(
-                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountWithMetadata,
-                #[account(signer)] caller: AccountWithMetadata,
+                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountMeta,
+                #[account(signer)] caller: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1289,7 +1286,7 @@ mod tests {
         }];
         let mut func: ItemFn = syn::parse_quote!(
             pub fn ext_transfer(
-                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountWithMetadata,
+                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1311,8 +1308,8 @@ mod tests {
         let specs = gate_specs();
         let mut func: ItemFn = syn::parse_quote!(
             pub fn ext_transfer(
-                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountWithMetadata,
-                #[account(signer)] caller: AccountWithMetadata,
+                #[account(mut, pda = literal("gate_config"))] mut gate_config: AccountMeta,
+                #[account(signer)] caller: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1341,10 +1338,10 @@ mod tests {
     fn canonical_constraint_resolves_from_init_declaration() {
         let fns = fns(r#"
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
             pub fn update(
-                #[account(mut, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(mut, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         assert_eq!(
@@ -1357,7 +1354,7 @@ mod tests {
     fn canonical_constraint_resolves_compound_pda() {
         let fns = fns(r#"
             pub fn initialize(
-                #[account(init, pda = [literal("cfg"), account("owner")])] mut cfg: AccountWithMetadata,
+                #[account(init, pda = [literal("cfg"), account("owner")])] mut cfg: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         assert_eq!(
@@ -1370,7 +1367,7 @@ mod tests {
     fn canonical_constraint_missing_init_is_error() {
         let fns = fns(r#"
             pub fn update(
-                #[account(mut, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(mut, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         let err = resolve_canonical_constraint(&fns, "prog_config").unwrap_err();
@@ -1388,7 +1385,7 @@ mod tests {
     fn canonical_constraint_init_without_pda_is_not_canonical() {
         let fns = fns(r#"
             pub fn initialize(
-                #[account(init)] mut prog_config: AccountWithMetadata,
+                #[account(init)] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         let err = resolve_canonical_constraint(&fns, "prog_config").unwrap_err();
@@ -1399,10 +1396,10 @@ mod tests {
     fn canonical_constraint_conflict_names_both_fns() {
         let fns = fns(r#"
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
             pub fn update(
-                #[account(mut, pda = literal("other_seed"))] mut prog_config: AccountWithMetadata,
+                #[account(mut, pda = literal("other_seed"))] mut prog_config: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         let err = resolve_canonical_constraint(&fns, "prog_config").unwrap_err();
@@ -1416,8 +1413,8 @@ mod tests {
     fn canonical_constraint_ignores_other_params_and_fns() {
         let fns = fns(r#"
             pub fn initialize(
-                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountWithMetadata,
-                #[account(init, pda = literal("unrelated"))] mut other: AccountWithMetadata,
+                #[account(init, pda = literal("prog_config"))] mut prog_config: AccountMeta,
+                #[account(init, pda = literal("unrelated"))] mut other: AccountMeta,
             ) -> SpelResult { todo!() }
         "#);
         assert_eq!(
@@ -1515,7 +1512,7 @@ mod tests {
         let mut func: ItemFn = parse_quote! {
             #[instruction]
             #[other_gate]
-            pub fn transfer(caller: AccountWithMetadata) -> SpelResult { todo!() }
+            pub fn transfer(caller: AccountMeta) -> SpelResult { todo!() }
         };
         assert_eq!(
             inject_gate_params(&mut func, &specs).unwrap(),
@@ -1547,8 +1544,8 @@ mod tests {
             #[instruction]
             #[my_gate(gate_config = my_cfg, caller = owner)]
             pub fn update_value(
-                #[account(pda = literal("gate_config"))] my_cfg: AccountWithMetadata,
-                #[account(signer)] owner: AccountWithMetadata,
+                #[account(pda = literal("gate_config"))] my_cfg: AccountMeta,
+                #[account(signer)] owner: AccountMeta,
                 new_value: u64,
             ) -> SpelResult { todo!() }
         };
@@ -1595,8 +1592,8 @@ mod tests {
             #[instruction]
             #[my_gate]
             pub fn withdraw(
-                #[account(pda = [literal("frozen"), account("sender")])] my_frozen: AccountWithMetadata,
-                #[account(signer)] sender: AccountWithMetadata,
+                #[account(pda = [literal("frozen"), account("sender")])] my_frozen: AccountMeta,
+                #[account(signer)] sender: AccountMeta,
                 amount: u64,
             ) -> SpelResult { todo!() }
         };
@@ -1713,9 +1710,8 @@ mod tests {
         }];
         let mut func: ItemFn = syn::parse_quote!(
             pub fn freeze_authority_renounce(
-                #[account(pda = literal("admin_config"))] admin_config: AccountWithMetadata,
-                #[account(mut, pda = literal("freeze_config"))]
-                mut freeze_config: AccountWithMetadata,
+                #[account(pda = literal("admin_config"))] admin_config: AccountMeta,
+                #[account(mut, pda = literal("freeze_config"))] mut freeze_config: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }
@@ -1767,7 +1763,7 @@ mod tests {
         ];
         let consumer: ItemFn = syn::parse_quote!(
             pub fn initialize(
-                #[account(init, pda = literal("shared"))] mut shared: AccountWithMetadata,
+                #[account(init, pda = literal("shared"))] mut shared: AccountMeta,
             ) -> SpelResult {
                 todo!()
             }

@@ -212,8 +212,8 @@ fn find_and_parse_type(items: &[Item], name: &str) -> Option<IdlTypeDef> {
     None
 }
 
-/// Last path segment of a type, e.g. `nssa_core::account::AccountWithMetadata`
-/// → `AccountWithMetadata`. `None` for non-path types (references, tuples).
+/// Last path segment of a type, e.g. `nssa_core::account::AccountMeta`
+/// → `AccountMeta`. `None` for non-path types (references, tuples).
 fn last_ident(ty: &Type) -> Option<String> {
     match ty {
         Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -222,20 +222,17 @@ fn last_ident(ty: &Type) -> Option<String> {
 }
 
 /// True for instruction params that are accounts rather than data args:
-/// `AccountWithMetadata`, `Vec<AccountWithMetadata>`, and `ProgramContext`.
+/// `AccountMeta`, `Vec<AccountMeta>`, and `ProgramContext`.
 fn is_account_shaped(ty: &Type) -> bool {
     match last_ident(ty).as_deref() {
-        Some("AccountWithMetadata") | Some("ProgramContext") => true,
+        Some("AccountMeta") | Some("ProgramContext") => true,
         Some("Vec") => {
             // reach into Vec<...>'s generic argument
             if let Type::Path(p) = ty {
                 if let Some(seg) = p.path.segments.last() {
                     if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
                         if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                            return matches!(
-                                last_ident(inner).as_deref(),
-                                Some("AccountWithMetadata")
-                            );
+                            return matches!(last_ident(inner).as_deref(), Some("AccountMeta"));
                         }
                     }
                 }
@@ -389,7 +386,7 @@ mod tests {
             }
 
             #[instruction]
-            pub fn do_it(caller: AccountWithMetadata, choice: MyChoice) -> SpelResult {
+            pub fn do_it(caller: AccountMeta, choice: MyChoice) -> SpelResult {
                 todo!()
             }
         };
