@@ -1,0 +1,26 @@
+[package]
+name = "mini-gate"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata.spel]
+extension_attr = "mini_gate"
+
+[[package.metadata.spel.inject]]
+wrapper = "require_gate"
+
+  [[package.metadata.spel.inject.account]]
+  name = "caller"
+  signer = true
+
+  [[package.metadata.spel.inject.account]]
+  name = "gate_config"
+  seed = [{ const = "gate_config" }]
+
+  [[package.metadata.spel.inject.account]]
+  name = "gate_record"
+  seed = [{ const = "gate_record" }, { account = "caller" }]
+
+[dependencies]
+mini-gate-macros = { path = "../mini_gate_macros" }
